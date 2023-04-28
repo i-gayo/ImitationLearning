@@ -168,111 +168,6 @@ class ActionFinder():
         
         return refined_actions 
 
-def find_closest_lesion(lesion_means, starting_point):
-    """
-    lesion_means : n x 2 where n is number of lesions
-    starting_point : (2,) where it is current point on grid 
-
-    Returns: 
-    -----------------
-    closest_idx: ordered idx values of closest lesion point 
-
-    """
-
-    dif_vec = lesion_means - starting_point 
-    dist_to_point = np.linalg.norm(dif_vec, axis = 1)
-    closest_idx = np.argsort(dist_to_point)[0]
-    needle_mean = lesion_means[closest_idx]
-
-    return closest_idx, needle_mean
-
-def find_closest_points(needle_coords, closest_lesion, starting_point):
-    """
-    Returns closest points to starting point from chosen lesion 
-    """
-
-    dif_vec = starting_point.reshape(2,1) - needle_coords[closest_lesion]
-    closest_idx = np.argsort(np.linalg.norm(dif_vec, axis = 0))
-
-    return closest_idx 
-
-def get_rel_actions(needle_coords, closest_idx, starting_point):
-    
-    """
-    Obtains relative actions to take from starting point to points on each grid
-    """
-    
-    # Reorderd needle coords according to distance to starting point 
-    reordered_points = needle_coords[:,closest_idx] # Reordered coords according to distance to previous point 
-    
-    # Obtain dif points (first element is starting point, next element are positions following needle coords)
-    dif_points = np.zeros_like(reordered_points)
-    dif_points[:,0] = starting_point 
-    dif_points[:, 1:] = dif_points[:, 0:-1]
-
-    relative_actions = (reordered_points[:,:] - dif_points[:,:])
-    new_start_pos = reordered_points[:,-1]
-
-    return relative_actions, new_start_pos
-
-def extract_volume_params(binary_mask):
-    
-    """ 
-    A function that extracts the parameters of the tumour masks: 
-        - Bounding box
-        - Centroid
-    
-    Parameters:
-    ------------
-    binary_mask : Volume of binary masks
-
-    Returns: 
-    ----------
-    if which_case == 'Prostate':
-    bb_values :  list of 5 x 1 numpy array of bounding box coordinates for Prostate; Radius of sphere for Tumour
-    tumour_centroid : ndarray
-    centroid coordinates of tumour in x,y,z 
-
-    if which_case == 'Tumour':
-    bb_values : float
-    Maximum radius from tumour centroid to bounding sphere 
-    tumour_centroid:  ndarray
-    centroid coordinates of tumour in x,y,z
-    """
-    
-    #Finding pixel indices of non-zero values 
-    idx_nonzero = np.where(binary_mask != 0)
-
-    #Min, max values in voxel coordinates in row (y) x col (x) x depth (z)
-    min_vals = np.min(idx_nonzero, axis = 1)
-    max_vals = np.max(idx_nonzero, axis = 1)
-    
-    #print(f"Width, height, depth : {max_vals - min_vals}")
-    #Obtain bounding box for prostate:
-    # tumour centroid is middle of bounding box 
-
-
-    total_area = len(idx_nonzero[0]) #Number of non-zero pixels 
-    z_centre = np.round(np.sum(idx_nonzero[2])/total_area)
-    y_centre = np.round(np.sum(idx_nonzero[0])/total_area)
-    x_centre = np.round(np.sum(idx_nonzero[1])/total_area)
-        
-    #In pixel coordinates 
-    y_dif, x_dif, z_dif = max_vals[:] - min_vals[:]
-    UL_corner = copy.deepcopy(min_vals) #Upper left coordinates of the bounding box 
-    LR_corner = copy.deepcopy(max_vals) #Lower right corodinates of bounding box 
-
-    #Centre-ing coordinates on rectum
-    UL_corner = UL_corner[[1,0,2]] #- self.rectum_position
-    LR_corner = LR_corner[[1,0,2]] #- self.rectum_position
-
-    #Bounding box values : coordinates of upper left corner (closest to slice 0) + width, height, depth 
-    bb_values = [UL_corner, x_dif, y_dif, z_dif, LR_corner] 
-
-    centroid = np.asarray([x_centre, y_centre, z_centre]).astype(int)
-
-    return bb_values, centroid 
-
 class ImageReader:
 
     def __call__(self, file_path, require_sitk_img = False):
@@ -344,17 +239,16 @@ class LabelLesions:
 
 class Image_dataloader(Dataset):
 
-    def __init__(self, folder_name, rectum_file, mode = 'train', use_all = False):
+    def __init__(self, folder_name, csv_path, mode = 'train', use_all = False):
         
         self.folder_name = folder_name
         self.mode = mode
-        self.rectum_file = rectum_file 
         #self.rectum_df = pd.read_csv(rectum_file)
         self.all_file_names = self._get_patient_list(os.path.join(self.folder_name, 'lesion'))
 
         # Obtain list of patient names with multiple lesions -> change to path name
         #df_dataset = pd.read_csv('./patient_data_multiple_lesions.csv')
-        df_dataset = pd.read_csv('/Users/ianijirahmae/Documents/PhD_project/MRes_project/Reinforcement Learning/patient_data_multiple_lesions.csv')
+        df_dataset = pd.read_csv(csv_path)
         #self.all_file_names = df_dataset['patient_name'].tolist()
         #self.num_lesions = df_dataset[' num_lesions'].tolist()
 
@@ -905,170 +799,194 @@ class GridArray():
 
         return grid_array, self.saved_grid
 
+def extract_volume_params(binary_mask):
+    
+    """ 
+    A function that extracts the parameters of the tumour masks: 
+        - Bounding box
+        - Centroid
+    
+    Parameters:
+    ------------
+    binary_mask : Volume of binary masks
+
+    Returns: 
+    ----------
+    if which_case == 'Prostate':
+    bb_values :  list of 5 x 1 numpy array of bounding box coordinates for Prostate; Radius of sphere for Tumour
+    tumour_centroid : ndarray
+    centroid coordinates of tumour in x,y,z 
+
+    if which_case == 'Tumour':
+    bb_values : float
+    Maximum radius from tumour centroid to bounding sphere 
+    tumour_centroid:  ndarray
+    centroid coordinates of tumour in x,y,z
+    """
+    
+    #Finding pixel indices of non-zero values 
+    idx_nonzero = np.where(binary_mask != 0)
+
+    #Min, max values in voxel coordinates in row (y) x col (x) x depth (z)
+    min_vals = np.min(idx_nonzero, axis = 1)
+    max_vals = np.max(idx_nonzero, axis = 1)
+    
+    #print(f"Width, height, depth : {max_vals - min_vals}")
+    #Obtain bounding box for prostate:
+    # tumour centroid is middle of bounding box 
+
+
+    total_area = len(idx_nonzero[0]) #Number of non-zero pixels 
+    z_centre = np.round(np.sum(idx_nonzero[2])/total_area)
+    y_centre = np.round(np.sum(idx_nonzero[0])/total_area)
+    x_centre = np.round(np.sum(idx_nonzero[1])/total_area)
+        
+    #In pixel coordinates 
+    y_dif, x_dif, z_dif = max_vals[:] - min_vals[:]
+    UL_corner = copy.deepcopy(min_vals) #Upper left coordinates of the bounding box 
+    LR_corner = copy.deepcopy(max_vals) #Lower right corodinates of bounding box 
+
+    #Centre-ing coordinates on rectum
+    UL_corner = UL_corner[[1,0,2]] #- self.rectum_position
+    LR_corner = LR_corner[[1,0,2]] #- self.rectum_position
+
+    #Bounding box values : coordinates of upper left corner (closest to slice 0) + width, height, depth 
+    bb_values = [UL_corner, x_dif, y_dif, z_dif, LR_corner] 
+
+    centroid = np.asarray([x_centre, y_centre, z_centre]).astype(int)
+
+    return bb_values, centroid 
+
 if __name__ == '__main__':
 
     # Code extracts the best positions to place needles into (ie best grid positions)
-
     ps_path = '/Users/ianijirahmae/Documents/DATASETS/Data_by_modality'
-    rectum_path = '/Users/ianijirahmae/Documents/PhD_project/rectum_pos.csv'
+    csv_path = '/Users/ianijirahmae/Documents/PhD_project/MRes_project/Reinforcement Learning/patient_data_multiple_lesions.csv'
+    labels_path = 'new_action_labels.h5'
+    # H5PY Dataset for saving labels : change file name to what is convenient for you
+    hf = h5py.File(labels_path, 'w')     
 
-    #ps_path = '/raid/candi/Iani/MRes_project/Reinforcement Learning/DATASETS/'
-    #rectum_path = '/raid/candi/Iani/MRes_project/Reinforcement Learning/rectum_pos.csv'
-
-    log_dir = 'test'
-    os.makedirs(log_dir, exist_ok=True)
-
-    # Define dataloader and lesion labellers 
-    PS_dataset_train = Image_dataloader(ps_path, rectum_path, use_all = True, mode  = 'all')
+    # Define dataloader and lesion labellers : use to load patietn volumes in 
+    PS_dataset_train = Image_dataloader(ps_path, csv_path, use_all = True, mode  = 'all')
     Data_sampler_train = DataSampler(PS_dataset_train)
-    lesion_labeller = LabelLesions()
-      
     NUM_DATASET = len(PS_dataset_train)
-    grid_labeller = GridLabeller() 
 
-    #with open('grid_labels.csv', 'w') as f:
-    #    f.write('''\
-    #      file_path, grid_vals
-    #      ''')
+    # Classes used to obtain labels : 
+    lesion_labeller = LabelLesions() # obtains lesion centroids 
+    grid_labeller = GridLabeller() # obtains needle grid positions for each lesion 
+    grid_creater = GridArray()
 
-    #hf_r = h5py.File('action_labels.h5', 'r')
 
-    # Sample dataset 
-    #hf = h5py.File('action_labels.h5', 'w')
-
-    #with open('patient_data_lesions.csv', 'w') as f:
-    #    f.write("patient_name, num_lesions")
- 
     for idx, (mri_vol, prostate_mask, tumour_mask, tumour_mask_sitk, rectum_pos, patient_name) in enumerate(PS_dataset_train):
 
+        empty_tumour_mask = (len(np.unique(tumour_mask)) == 1) # in tumour mask only 0s which means no tumour is present 
 
-        print(f'Tumour idx : {idx}')
-        tumour_centroids, num_lesions, tumour_statistics, multiple_label_img = lesion_labeller(tumour_mask_sitk)
-
-        #Compute lesion labels and prostate centroids 
-        if len(np.unique(tumour_mask)) == 1:
+        if empty_tumour_mask:
+            
+            # print for references, but do not use to obtain labels from 
             print(patient_name)
+        
         else:
-            #with open('patient_data_lesions.csv', 'a') as f:
-            #    f.write("\n")
-            #    f.write(patient_name) 
-            #    f.write(',')
-            #    f.write(str(num_lesions))
-
+            
+            ### 1. OBTAIN LESION CENTROIDS USING LABELLESIONS CLASS ###
             tumour_centroids, num_lesions, tumour_statistics, multiple_label_img = lesion_labeller(tumour_mask_sitk)
             bb_centroid, prostate_centroid = extract_volume_params(prostate_mask)
-            #prostate_centroid[1] += 100 # Add 100 to move to image coords 
 
+            ### 2. FIND 4 NEEDLE GRID POSITIONS PER LESION USING GRIDLABELLER CLASS : grid_labels gives index of each needle position   ###
             # Obtain image projections of grid overlaid with lesion and prostate 
             img_overlay, grid, grid_points = grid_labeller.overlay_grid(prostate_mask, multiple_label_img, prostate_centroid)
+        
             lesion_overlay = grid_labeller.get_projection(multiple_label_img)
 
             # Obtain classification grid and binary array of 1s, 0s of best grid positions) 
             grid_labels, fired_grid, fired_grid_depth, small_fired_grid, small_fired_grid_depth, simple_grid = grid_labeller.get_labels(prostate_mask, tumour_centroids, grid_points, num_needles = 4) 
             combined_grid = np.sum(simple_grid, axis = 2)
-            
-            # To find coords for each lesion 
 
+            # To find coords for each lesion 
             # coord system : -6,6 left to right and -6,6 bottom to top of grid 
             x_coords, y_coords = np.meshgrid(np.arange(-6,7,1), np.arange(-6, 7, 1))
             x_ = x_coords.reshape(-1)
             y_ = y_coords.reshape(-1)
             
-            # Finding coordinates of nedle points per lesion 
+            # Finding coordinates of needle points per lesion 
             needle_coords = [] 
-            # Iterate through each lesion 
+
+            # Iterate through each lesion, obtain grid positions of each needle fired 
             for points in (grid_labels):
-                
                 idx_vals = [int(idx) for idx in points] # convert from float to int 
                 needle_coords.append(np.array([x_[idx_vals], y_[idx_vals]])) # obtain x,y coordinate on grid 
 
-            
-            starting_point = np.array([0,0])
             needle_means = [np.mean(points, axis = 1) for points in needle_coords]  # mean coords of each needle points per lesion 
-            #original_idx = list(range(0,len(needle_means)))
             print(f'Needle means \n {needle_means}')
+
+            ### 3. OBTAIN ACTIONS PER TIME STEP USING ACTIONFINDER CLASS ###
+            starting_point = np.array([0,0]) #initialise starting point as centre of grid 
             all_actions = []
             
             action_mapper = ActionFinder(needle_means, needle_coords, starting_point)
 
+            # Find actions for each lesion 
             for idx in range(num_lesions):
                 rel_actions, starting_point = action_mapper.find_actions(starting_point)
                 all_actions.append(rel_actions)
-
             all_actions = np.concatenate(all_actions, axis =1)
 
-            # Creating grid array obs 
-            GridCreater = GridArray()
+
+            ### 4. OBTAIN STATES/OBSERVATIONS PER TIME STEP USING GRIDARRAY CLASS ###
+            # Obtain updated grid position at each time step : 100 x 100 grid. 
+            # Note : intensity = 0.25 for current position, 0.5 for non-fired but previously visited position and 1 for fired previously visited position. 0 otherwise 
+
             NUM_ACTIONS = np.shape(all_actions)[1]
-            
             all_grids = [] 
 
             # Starting pos 
             current_pos = np.array([0.,0.,0.])
             for idx in range(NUM_ACTIONS):
                 
+                # iterate through each time step and obtain actions at each time step 
                 action_set = all_actions[:,idx]
                 #print(f'Action set : {action_set}')
                 
+                # First position, current pos is (0,0) 
                 if idx == 0: 
                     first_point = True 
                     grid_array = None 
 
                     template_grid = np.zeros((100,100))
-                    template_grid[50,50] = 0.25 # for displaying current pos 
+                    template_grid[50,50] = 0.25 # current position = 0.25 
                     all_grids.append(template_grid)
                     
-                    #plt.figure()
-                    #plt.imshow(template_grid)
-                    #plt.title("Final grid array")
-                    #plt.show()
-
-                    #current_pos[2] = action_set[2]
-                    #current_pos[0:2] += action_set[0:2]
-                
                 else: 
-                    
-                    grid_array, grid_his = GridCreater.create_grid_array(current_pos, grid_array)
+                    # Update grid array 
+                    grid_array, grid_his = grid_creater.create_grid_array(current_pos, grid_array)
                     all_grids.append(grid_array)
 
-                current_pos[2] = action_set[2]
-                current_pos[0:2] += action_set[0:2]
+                # Update new position 
+                current_pos[2] = action_set[2] # z position : 0 if not-fired, 1 if fired 
+                current_pos[0:2] += action_set[0:2] # new_pos = current_pos + (delta_x, delta_y)
 
-            
+            # Stack all actions and observations 
             all_grids_array = np.stack(all_grids)
             all_actions = np.transpose(all_actions)
 
-            # Comparing final grid array (for labels and ground truth (fired_grid))
-            #plt.figure()
-            #plt.imshow(grid_array)
-            #plt.title("Final grid array")
-            #plt.figure()
-            #plt.imshow(fired_grid)
-            #plt.show()
-
             print('Chicken')
 
+            ### 5. SAVE OBSERVATION AND ACTIONS TO H5PY FILE ###
             file_path = tumour_mask_sitk.split('/')[-1]
-            #csv_items = [file_path, list(grid_vals)]
             grid_vals = np.concatenate(grid_labels)
-            # Write to csv file the labels 
-            
-            # Writing labels
-            #with open('grid_labels.csv', 'a') as f:
-            #    f.write(file_path)
-            #    f.write(',')
-            #    np.savetxt(f, np.reshape(grid_vals,(1,-1)), '%s', ',')
 
-            # TODO: Write small grid to h5py or csv file!! 
+            # Save to h5py file 
             group_folder = hf.create_group(file_path)
-            group_folder.create_dataset('fired_grid', data = fired_grid)
-            group_folder.create_dataset('fired_grid_depth', data = fired_grid_depth)
-            group_folder.create_dataset('small_fired_grid', data = small_fired_grid)
-            group_folder.create_dataset('small_fired_grid_depth', data = small_fired_grid_depth)
-            group_folder.create_dataset('simple_grid', data = simple_grid)
-            group_folder.create_dataset('idx_labels', data = grid_vals)
-            group_folder.create_dataset('all_actions', data = all_actions)
-            group_folder.create_dataset('all_grids', data = all_grids_array)
+
+            # save per-timestep actions 
+            group_folder.create_dataset('all_actions', data = all_actions) # actions at each time step from 0:T-1 where T is number of timesteps taken ; N x 3 
+            group_folder.create_dataset('all_grids', data = all_grids_array) # grid arrays at each time step from 0:T-1 where T is number of timesteps taken ; N x 100 x 100 
+            group_folder.create_dataset('fired_grid', data = fired_grid) # position of all grid coords to be fired ; 200 x 200 
+
+            # save grids used for alternative supervised learning : predict all grid positions together 
+            group_folder.create_dataset('fired_grid_depth', data = fired_grid_depth)  # position of each grid position ; 200 x 200 x 2 to split for base and apex firing 
+            group_folder.create_dataset('simple_grid', data = simple_grid) # position of each grid position ; 13 x 13 x 2 and split into base and apex firing 
+            group_folder.create_dataset('idx_labels', data = grid_vals)# index of all needle grid positions fired (from 0-168); Shape Num_lesions x 4 
 
             print('\n')
 
@@ -1079,173 +997,10 @@ if __name__ == '__main__':
         #        f.write('\n')
         #    f.write(','.join(str(item) for item in csv_items))
 
-        """
-        # Reading labels -> supervision code!!! MIGHT NEED TO CHANGE THIS TO FIRED GRID 
-        """
-        #with open('grid_labels.csv', 'r') as f:
-        #    reader = csv.reader(f, delimiter =',')
-        #    for idx, item in enumerate(reader):
-        #        if idx != 0: 
-        #            file_path_read = item[0]
-        #            idx_vals = [int(float(val)) for val in item[1:]]
-        """
+    
+    #
 
-
-        #plt.figure()
-        #plt.imshow(lesion_overlay + 10*fired_grid)
-        #plt.show()
-
-
-        # Save in CSV file or readable format 
-        print('Chicken')
-    """
-        
-    hf.close()
+    # Close hf  
+    hf.close() 
 
     print('Chicken')
-
-    #### EXTRA CODE #####
-    # Obtain image example from dataloader 
-    (mri_vol, prostate_mask, tumour_mask, tumour_mask_sitk, rectum_pos, patient_name) = Data_sampler_train.sample_data()
-
-    # Note : tumour_centroids are in format (x,y,z) where x is the col and y is row
-    tumour_centroids, num_lesions, tumour_statistics, multiple_label_img = lesion_labeller(tumour_mask_sitk)
-    bb_centroid, prostate_centroid = extract_volume_params(prostate_mask)
-    prostate_centroid[1] += 100 # Add 100 to convert from x coords to image coords for matplotlib 
-    
-    # Obtaining projections of tumour and prostates 
-    tumour_projection = np.max(multiple_label_img, axis = 2)
-    prostate_projection = np.squeeze(np.max(prostate_mask.detach().numpy(), axis = 3))
-    
-    # Visualisation code 
-    grid_array = np.zeros_like(tumour_projection)    
-    
-    grid_single_val = np.zeros_like(tumour_projection)
-    for i in range(-60, 65, 10):
-        for j in range(-60, 65, 10):
-            grid_array[prostate_centroid[0] +j  - 1:prostate_centroid[0]+j+ 1,prostate_centroid[1]+i - 1:prostate_centroid[1] +i + 1 ] = 1
-            grid_single_val[prostate_centroid[0]+j , prostate_centroid[1] +i] = 1
-
-    combined_img = tumour_projection + prostate_projection*5 + grid_array*10
-
-    # Code for finding 2 closest points to lesion 
-    grid_coords = np.where(grid_single_val != 0)
-
-    fired_points = np.zeros((num_lesions, 2))
-    
-    for idx, lesion_centre in enumerate(tumour_centroids):
-        centre_point = np.reshape(lesion_centre[0:2], (2,-1))
-        
-        # Compute distance from centre of lesion to grid coords 
-        dif_to_centroid = grid_coords - centre_point
-        dist_to_centroid = np.linalg.norm(dif_to_centroid, axis = 0)
-        
-        # Rule : Choose 2 closest to the centroid of lesion 
-        closest_points = np.argsort(dist_to_centroid)
-        fired_points[idx, :] = closest_points[0:2]
-
-    grid_coords = np.array(grid_coords)
-
-    # Plotting only the fired grid points 
-    all_fired_points = np.concatenate(fired_points)
-    fired_grid = np.zeros_like(grid_array) # 1 where we want to fire a needle ie 2 closest grid poitns to centre of lesion 
-    
-    for point in all_fired_points:
-        coords = grid_coords[:,int(point)]
-        print(coords)
-        fired_grid[coords[1] - 1 :coords[1] +1 , coords[0] -1 : coords[0] +1] = 1
-    
-
-    # Fired grid with overlay of lesions and prostate
-    lesions_with_needles = tumour_projection + prostate_projection*5 + fired_grid*10
-    plt.imshow(lesions_with_needles)
-    
-
-
-
-
-
-
-
-"""
-# Testing out class 
-action_mapper = ActionFinder(needle_means, needle_coords, starting_point)
-rel_actions_1, new_start_pos = action_mapper.find_actions(starting_point)
-print(f'New start pos {new_start_pos}')
-rel_actions_2, new_start_pos = action_mapper.find_actions(new_start_pos)
-print(f'New start pos {new_start_pos}')
-rel_actions_3, new_start_pos = action_mapper.find_actions(new_start_pos)
-print(f'New start pos {new_start_pos}')
-rel_actions_4, new_start_pos = action_mapper.find_actions(new_start_pos)
-print(f'New start pos {new_start_pos}')
-print(f'Rel actions : \n {rel_actions_4}')
-test = action_mapper.refine_actions(rel_actions_4)
-
-# Testing each function -> WORKS!! just need to make sure it works in a loop -> moving onto next lesion :(())
-closest_idx, lesion_mean = find_closest_lesion(needle_means, starting_point)
-points_idx = find_closest_points(needle_coords, closest_idx, starting_point)
-relative_actions1, new_pos = get_rel_actions(needle_coords[closest_idx], points_idx, starting_point)
-
-# TODO : Do this for each lesion 
-remaining_needles = copy.deepcopy(needle_means)
-remaining_needles.pop(closest_idx)
-original_idx.pop(closest_idx)
-_, lesion_mean = find_closest_lesion(remaining_needles, needle_means[closest_idx])
-closest_idx = np.where(needle_means == lesion_mean)[0][0] # find closest point to current idx from remaining values
-points_idx = find_closest_points(needle_coords, closest_idx, new_pos)
-relative_actions2, new_pos = get_rel_actions(needle_coords[closest_idx], points_idx, new_pos)
-
-# repeat for next 
-remaining_needles = copy.deepcopy(remaining_needles)
-remaining_needles.pop(closest_idx)
-_, lesion_mean = find_closest_lesion(remaining_needles, needle_means[closest_idx])
-closest_idx = np.where(needle_means == lesion_mean)[0][0] # find closest point to current idx from remaining values
-points_idx = find_closest_points(needle_coords, closest_idx, starting_point)
-relative_actions3, new_pos = get_rel_actions(needle_coords[closest_idx], points_idx, new_pos)
-
-remaining_needles = copy.deepcopy(remaining_needles)
-remaining_needles.pop(closest_idx)
-_, lesion_mean = find_closest_lesion(remaining_needles, needle_means[closest_idx])
-closest_idx = np.where(needle_means == lesion_mean)[0][0] # find closest point to current idx from remaining values
-points_idx = find_closest_points(needle_coords, closest_idx, starting_point)
-relative_actions2 = get_rel_actions(needle_coords[closest_idx], points_idx, starting_point)
-
-### HARD CODED FUNCTIONS 
-
-# finding distance to centre for each mean 
-needle_means = [np.mean(points, axis = 1) for points in needle_coords]
-dist_to_centre = (np.linalg.norm(needle_means, axis = 1))
-
-# find idx of closest point to centre
-closest_lesion = np.argsort(dist_to_centre)[0] 
-
-# find idx of closet point to centre and re-order needle coords to dist to previous point 
-closest_idx = np.argsort(np.linalg.norm(needle_coords[closest_lesion], axis = 0))
-
-# find relative actions: 
-reordered_points = needle_coords[closest_lesion][:,closest_idx] # Reordered coords according to distance to previous point 
-dif_points = np.zeros_like(reordered_points)
-dif_points[:, 1:] = dif_points[:, 0:-1]
-relative_actions = (reordered_points[:,1:] - dif_points[:,1:])*5
-
-new_starting_pos = reordered_points[:,-1]
-
-# Re-start : Find next closest lesion, remove from list of means  
-needle_means.pop(closest_lesion) 
-
-dist_to_point = np.linalg.norm(needle_means - new_starting_pos, axis = 1)            
-next_idx = 0
-"""
-
-"""
-# Code for obtaining smaller fired grid instead of 200 x 200 -> get 30x30 
-nx_13, ny_13 = np.meshgrid(np.arange(0, 13), np.arange(0,13))
-coords = np.array([np.reshape(nx_13, -1), np.reshape(ny_13, -1)])
-
-grid_label = np.zeros((30,30))
-
-for points in grid_vals:
-    points = int(points)
-    grid_label[int(2*(coords[0,points]+1)), int(2*(coords[1,points]+1))] = 1
-
-"""
