@@ -164,16 +164,16 @@ class LabelLesions:
 
 class Image_dataloader(Dataset):
 
-    def __init__(self, folder_name, rectum_file, mode = 'train', use_all = False):
+    def __init__(self, folder_name, csv_file, mode = 'train', use_all = False):
         
         self.folder_name = folder_name
         self.mode = mode
-        self.rectum_file = rectum_file 
+        self.csv_file = csv_file
         #self.rectum_df = pd.read_csv(rectum_file)
         #self.all_file_names = self._get_patient_list(os.path.join(self.folder_name, 'lesion'))
 
         # Obtain list of patient names with multiple lesions -> change to path name
-        df_dataset = pd.read_csv('./patient_data_multiple_lesions.csv')
+        df_dataset = pd.read_csv(csv_file)
         #df_dataset = pd.read_csv('/Users/ianijirahmae/Documents/PhD_project/MRes_project/Reinforcement Learning/patient_data_multiple_lesions.csv')
         self.all_file_names = df_dataset['patient_name'].tolist()
         self.num_lesions = df_dataset[' num_lesions'].tolist()

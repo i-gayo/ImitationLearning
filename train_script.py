@@ -14,9 +14,10 @@ from stable_baselines3.common.policies import ActorCriticPolicy
 from typing import Callable, Dict, List, Optional, Tuple, Type, Union
 import gym
 #Processes for multi-env processing 
-from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecFrameStack
 from rl_utils import *
+from utils import *
 from stable_baselines3.common.policies import ActorCriticPolicy
+
 #Importing module functions 
 from Prostate_dataloader import *
 from Biopsy_env import TemplateGuidedBiopsy_penalty
@@ -47,7 +48,7 @@ parser.add_argument('--clip_actions',
                     type=bool,
                     action='store',
                     default=False,
-                    help='Whether or not to clip actions during training /t esting')
+                    help='Whether or not to clip actions during training /testing')
 
 parser.add_argument('--use_custom_policy',
                     '--custom',
@@ -67,7 +68,7 @@ parser.add_argument('--debugging',
 
 class TimeStep_data(Dataset):
 
-    def __init__(self, folder_name, labels_path = 'action_labels.h5', mode = 'train', finetune = False):
+    def __init__(self, folder_name, csv_path, labels_path = 'action_labels.h5', mode = 'train', finetune = False):
 
         self.folder_name = folder_name
         self.mode = mode
@@ -75,7 +76,8 @@ class TimeStep_data(Dataset):
         self.finetune = finetune
 
         # Obtain list of patient names with multiple lesions -> change to path name
-        df_dataset = pd.read_csv('/raid/candi/Iani/Biopsy_RL/patient_data_multiple_lesions.csv')
+        #csv_path ='/raid/candi/Iani/Biopsy_RL/patient_data_multiple_lesions.csv'
+        df_dataset = pd.read_csv(csv_path)
         #df_dataset = pd.read_csv('/Users/ianijirahmae/Documents/PhD_project/MRes_project/Reinforcement Learning/patient_data_multiple_lesions.csv')
         self.all_file_names = df_dataset['patient_name'].tolist()
         self.num_lesions = df_dataset[' num_lesions'].tolist()
@@ -227,7 +229,7 @@ class TimeStep_data_debug(Dataset):
     Debugging dataloader : always returns the same action [1 0 0] ie always going in a horizontal striaghtg line -> 
     """
 
-    def __init__(self, folder_name, labels_path = 'action_labels.h5', mode = 'train', finetune = False):
+    def __init__(self, folder_name, csv_path, labels_path = 'action_labels.h5', mode = 'train', finetune = False):
 
         self.folder_name = folder_name
         self.mode = mode
@@ -235,7 +237,7 @@ class TimeStep_data_debug(Dataset):
         self.finetune = finetune
 
         # Obtain list of patient names with multiple lesions -> change to path name
-        df_dataset = pd.read_csv('/raid/candi/Iani/Biopsy_RL/patient_data_multiple_lesions.csv')
+        df_dataset = pd.read_csv(csv_path)
         #df_dataset = pd.read_csv('/Users/ianijirahmae/Documents/PhD_project/MRes_project/Reinforcement Learning/patient_data_multiple_lesions.csv')
         self.all_file_names = df_dataset['patient_name'].tolist()
         self.num_lesions = df_dataset[' num_lesions'].tolist()
@@ -389,85 +391,6 @@ class TimeStep_data_debug(Dataset):
 
         return combined_tumour_prostate 
 
-class SimpleFeatureExtractor_3D_continuous(BaseFeaturesExtractor):
-    """
-    :param observation_space: (gym.Space)
-    :param features_dim: (int) Number of features extracted.
-        Correspods to the number of unit for the last layer.
-    """
-
-    def __init__(self, observation_space: gym.spaces.Box, features_dim: int = 512, multiple_frames = False, num_multiple_frames = 3):
-        
-        super(SimpleFeatureExtractor_3D_continuous, self).__init__(observation_space, features_dim)
-        # Assumes CxHxW images (channels first)
-        # Re-ordering will be done by pre-preprocessing or wrapper
-
-        num_input_channels = observation_space.shape[-1] #rows x cols x channels 
-        #num_multiple_frames = 3
-        num_multiple_frames = num_multiple_frames
-        self.num_multiple_frames = num_multiple_frames
-        self.cnn_layers = nn.Sequential(
-
-            # First layer like resnet, stride = 2
-            nn.Conv3d(num_multiple_frames, 32, kernel_size=3, stride=2, padding=1),
-            nn.BatchNorm3d(32),
-            nn.ReLU(),
-
-            # Apply pooling layer in between 
-            nn.MaxPool3d(kernel_size = 3, stride = 2, padding = 1),
-
-            nn.Conv3d(32, 64, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm3d(64),
-            nn.ReLU(),
-
-            # Apply pooling layer in between 
-            nn.MaxPool3d(kernel_size = 3, stride = 2, padding = 1),
-
-            nn.Conv3d(64, 128, kernel_size=3, stride=1),
-            nn.BatchNorm3d(128),
-            nn.ReLU()
-        )
-
-        #Flatten layers 
-        self.flatten = nn.Flatten()
-
-        # Compute shape by doing one forward pass
-        with torch.no_grad():
-            all_layers = nn.Sequential(self.cnn_layers, self.flatten)
-            
-            #observation_space_shuffled = np.transpose(observation_space.sample(), [2, 1, 0])
-            #n_flatten = all_layers(torch.as_tensor(observation_space_shuffled[None]).float()).shape[1]
-            processed_obs_space = self._pre_process_image(torch.as_tensor((observation_space.sample()[None]))).float()
-            n_flatten = all_layers(processed_obs_space).shape[1]  
-
-        self.linear = nn.Sequential(nn.Linear(n_flatten, features_dim), nn.ReLU())
-
-    def forward(self, observations: torch.Tensor) -> torch.Tensor:
-        
-        observations = self._pre_process_image(observations)
-        observations = observations.float() 
-        output = self.cnn_layers(observations)
-        output = self.flatten(output)
-        
-        return self.linear(output)
-
-    def _pre_process_image(self, images):
-        """ 
-        A function that switches the dimension of image from row x col x channel -> channel x row x colmn 
-        and addeds a dimension along 0th axis to fit network 
-        """ 
-        #print(f'Image size {images.size()}')
-        image = images.clone().detach().to(torch.uint8)#.squeeze()
-        if len(np.shape(images)) == 5:
-            image = image.squeeze()
-        split_channel_image = torch.cat([torch.cat([image[j,:,:,i*25:(i*25)+25].unsqueeze(0) for i in range(3)]).unsqueeze(0) for j in range(image.size()[0])])#.clone().detach().to(torch.uint8)
-        #split_channel_image = torch.cat([torch.cat(torch.tensor_split(image[i,:,:,:].unsqueeze(0), self.num_multiple_frames, dim=3)).unsqueeze(0) for i in range(image.size()[0])])
-        #processed_image = image.permute(0, 3,2,1)
-        #processed_image = torch.unsqueeze(processed_image, dim= 0)
-        
-        # Turn image from channel x row x column -> channel x row x column x depth for pre-processing with 3D layers 
-
-        return split_channel_image
 
 def compute_rmse(mse):
     """
@@ -682,7 +605,89 @@ def validate_pertimestep(val_dataloader, model, use_cuda = True, save_path = 'mo
 
     return mean_loss, mean_acc
 
+# Networks to use for training 
+class FeatureExtractor(BaseFeaturesExtractor):
+    """
+    :param observation_space: (gym.Space)
+    :param features_dim: (int) Number of features extracted.
+        Correspods to the number of unit for the last layer.
+    """
+
+    def __init__(self, observation_space: gym.spaces.Box, features_dim: int = 512, multiple_frames = False, num_multiple_frames = 3):
+        
+        super(FeatureExtractor, self).__init__(observation_space, features_dim)
+        # Assumes CxHxW images (channels first)
+        # Re-ordering will be done by pre-preprocessing or wrapper
+
+        num_input_channels = observation_space.shape[-1] #rows x cols x channels 
+        #num_multiple_frames = 3
+        num_multiple_frames = num_multiple_frames
+        self.num_multiple_frames = num_multiple_frames
+        self.cnn_layers = nn.Sequential(
+
+            # First layer like resnet, stride = 2
+            nn.Conv3d(num_multiple_frames, 32, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm3d(32),
+            nn.ReLU(),
+
+            # Apply pooling layer in between 
+            nn.MaxPool3d(kernel_size = 3, stride = 2, padding = 1),
+
+            nn.Conv3d(32, 64, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm3d(64),
+            nn.ReLU(),
+
+            # Apply pooling layer in between 
+            nn.MaxPool3d(kernel_size = 3, stride = 2, padding = 1),
+
+            nn.Conv3d(64, 128, kernel_size=3, stride=1),
+            nn.BatchNorm3d(128),
+            nn.ReLU()
+        )
+
+        #Flatten layers 
+        self.flatten = nn.Flatten()
+
+        # Compute shape by doing one forward pass
+        with torch.no_grad():
+            all_layers = nn.Sequential(self.cnn_layers, self.flatten)
+            
+            #observation_space_shuffled = np.transpose(observation_space.sample(), [2, 1, 0])
+            #n_flatten = all_layers(torch.as_tensor(observation_space_shuffled[None]).float()).shape[1]
+            processed_obs_space = self._pre_process_image(torch.as_tensor((observation_space.sample()[None]))).float()
+            n_flatten = all_layers(processed_obs_space).shape[1]  
+
+        self.linear = nn.Sequential(nn.Linear(n_flatten, features_dim), nn.ReLU())
+
+    def forward(self, observations: torch.Tensor) -> torch.Tensor:
+        
+        observations = self._pre_process_image(observations)
+        observations = observations.float() 
+        output = self.cnn_layers(observations)
+        output = self.flatten(output)
+        
+        return self.linear(output)
+
+    def _pre_process_image(self, images):
+        """ 
+        A function that switches the dimension of image from row x col x channel -> channel x row x colmn 
+        and addeds a dimension along 0th axis to fit network 
+        """ 
+        #print(f'Image size {images.size()}')
+        image = images.clone().detach().to(torch.uint8)#.squeeze()
+        if len(np.shape(images)) == 5:
+            image = image.squeeze()
+        split_channel_image = torch.cat([torch.cat([image[j,:,:,i*25:(i*25)+25].unsqueeze(0) for i in range(3)]).unsqueeze(0) for j in range(image.size()[0])])#.clone().detach().to(torch.uint8)
+        #split_channel_image = torch.cat([torch.cat(torch.tensor_split(image[i,:,:,:].unsqueeze(0), self.num_multiple_frames, dim=3)).unsqueeze(0) for i in range(image.size()[0])])
+        #processed_image = image.permute(0, 3,2,1)
+        #processed_image = torch.unsqueeze(processed_image, dim= 0)
+        
+        # Turn image from channel x row x column -> channel x row x column x depth for pre-processing with 3D layers 
+
+        return split_channel_image
+
 class CustomNetwork(nn.Module):
+
     """
     Custom network for policy and value function.
     It receives as input the features extracted by the features extractor.
@@ -752,31 +757,33 @@ class CustomActorCriticPolicy(ActorCriticPolicy):
         self.mlp_extractor = CustomNetwork(self.features_dim)
 
 if __name__ =='__main__':
-
-    #PS_PATH = '/Users/ianijirahmae/Documents/DATASETS/Data_by_modality'
-    #LABELS_PATH = '/Users/ianijirahmae/Documents/PhD_project/Biopsy_RL/action_labels.h5'
     
     ### Path files for PT
     args = parser.parse_args()
-    PS_PATH = '/raid/candi/Iani/MRes_project/Reinforcement Learning/DATASETS/'
-    LABELS_PATH = '/raid/candi/Iani/Biopsy_RL/action_labels.h5'
-    RECTUM_PATH = '/Users/ianijirahmae/Documents/PhD_project/rectum_pos.csv'
-    LOG_DIR = args.log_dir  
-    TRAIN_MODE = 'train'
-    DEBUGGING = args.debugging
 
+    # Change to paths on your device 
+    PS_PATH = '/Users/ianijirahmae/Documents/DATASETS/Data_by_modality'
+    LABELS_PATH = '/Users/ianijirahmae/Documents/PhD_project/Biopsy_RL/action_labels.h5'
+    CSV_PATH = '/Users/ianijirahmae/Documents/PhD_project/MRes_project/Reinforcement Learning/patient_data_multiple_lesions.csv'
+
+    # Training process parameters    
+    TRAIN_MODE = 'train'
+    LOG_DIR = args.log_dir  # folder path to save trained models into 
     use_cuda = torch.cuda.is_available()
     device_cuda = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f'Device : {device_cuda}')
 
-    # Training process parameters
-    use_custom_policy = args.use_custom_policy
-    clip_actions = args.clip_actions
-    print(f'Clipped actions : {clip_actions} ; using custom policy with tanh : {use_custom_policy}')
-    print(f"Debugging mode : {DEBUGGING}")
+    # Training process parameters : all set to false by default. 
+    use_custom_policy = args.use_custom_policy # custom policy uses tanh instead of Relu for final layer of network 
+    clip_actions = args.clip_actions # clip actions between (-1,1) during inference 
+    DEBUGGING = args.debugging # whether or not to use debugging datalodaer 
 
-    # SETTING UP RL ENVIRONMENT 
-    PS_dataset = Image_dataloader(PS_PATH, RECTUM_PATH, use_all = True, mode  = TRAIN_MODE)
+    # for info printing 
+    print(f'Clipped actions : {clip_actions} ; using custom policy with tanh : {use_custom_policy}')
+    print(f"Using debugging dataloader: {DEBUGGING}")
+
+    # Setting up RL networks to extract custom policy networks used for RL training 
+    PS_dataset = Image_dataloader(PS_PATH, CSV_PATH, use_all = True, mode  = TRAIN_MODE)
     Data_sampler= DataSampler(PS_dataset)
     Biopsy_env_init = TemplateGuidedBiopsy_penalty(Data_sampler, train_mode = TRAIN_MODE)
     Biopsy_env = frame_stack_v1(Biopsy_env_init, 3)
@@ -784,29 +791,36 @@ if __name__ =='__main__':
 
     # Initialising agent to be trained 
     if use_custom_policy: 
-        policy_kwargs = dict(features_extractor_class = SimpleFeatureExtractor_3D_continuous, \
+        # uses custom policy for final layers of actor-critic network (ie tanh instead of relu)
+        policy_kwargs = dict(features_extractor_class = FeatureExtractor, \
         features_extractor_kwargs=dict(multiple_frames = True, num_multiple_frames = 3), activation_fn = torch.nn.Tanh)
         agent = PPO(CustomActorCriticPolicy, Biopsy_env, policy_kwargs = policy_kwargs, tensorboard_log = LOG_DIR)
     else:
-        policy_kwargs = dict(features_extractor_class = SimpleFeatureExtractor_3D_continuous, features_extractor_kwargs=dict(multiple_frames = True, num_multiple_frames = 3))
+        
+        policy_kwargs = dict(features_extractor_class = FeatureExtractor, features_extractor_kwargs=dict(multiple_frames = True, num_multiple_frames = 3))  # defines feature extractor to be used for network 
         agent = PPO(CnnPolicy, Biopsy_env, policy_kwargs = policy_kwargs, device = device_cuda, tensorboard_log = LOG_DIR)
 
+    # Use same policy network structure used by agents in RL 
     IL_MODEL = agent.policy.to(device_cuda)
 
-    # Pre-train using behavioural cloning /imitation learning 
+    # Alternatively, initialise imitation learning network defined in networks.py 
+    # IL_MODEL = ImitationNetwork()
 
-    # Pre-training datasets using example behaviour 
+    # Load paired observation-action time step data 
     if DEBUGGING: 
+        # Uses debugging dataloader instead of normal data loader 
         # prints out patient idx and action idx to check for gradient updates
         train_ds = TimeStep_data_debug(PS_PATH, LABELS_PATH, mode = 'train')
         val_ds = TimeStep_data_debug(PS_PATH, LABELS_PATH, mode = 'val')
     else:
-        train_ds = TimeStep_data(PS_PATH, LABELS_PATH, mode = 'train')
-        val_ds = TimeStep_data(PS_PATH, LABELS_PATH, mode = 'val')
+        train_ds = TimeStep_data(PS_PATH, CSV_PATH, LABELS_PATH, mode = 'train')
+        val_ds = TimeStep_data(PS_PATH, CSV_PATH, LABELS_PATH, mode = 'val')
 
     train_dl = DataLoader(train_ds, batch_size = 32, shuffle = True)
     val_dl = DataLoader(val_ds, batch_size = 8, shuffle = False)
 
+
+    # Perform training loop : uses train_pertimestep function found in utils.py 
     all_loss_train, all_loss_val, all_acc_train, all_acc_val  = train_pertimestep(IL_MODEL, agent, train_dl, val_dl, \
         num_epochs = 10000, use_cuda = use_cuda, save_folder = LOG_DIR, clip_actions = clip_actions) 
 

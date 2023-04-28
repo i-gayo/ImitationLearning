@@ -12,7 +12,7 @@ from supersuit import frame_stack_v1
 from stable_baselines3.common.utils import set_random_seed
 from stable_baselines3.common.vec_env.base_vec_env import VecEnvWrapper
 
-from utils_data import *
+from rl_utils import *
 #Import all dataloader functions 
 from Prostate_dataloader import * 
 from stable_baselines3.ppo.policies import CnnPolicy#, MultiInputPolicy
@@ -1622,7 +1622,7 @@ if __name__ == '__main__':
         
     #Evaluating agent on training and testing data 
     ps_path = '/Users/ianijirahmae/Documents/DATASETS/Data_by_modality'
-    rectum_path = '/Users/ianijirahmae/Documents/PhD_project/rectum_pos.csv'
+    csv_path = '/Users/ianijirahmae/Documents/PhD_project/rectum_pos.csv'
 
     #ps_path = '/raid/candi/Iani/MRes_project/Reinforcement Learning/DATASETS/'
     #rectum_path = '/raid/candi/Iani/MRes_project/Reinforcement Learning/rectum_pos.csv'
@@ -1630,7 +1630,7 @@ if __name__ == '__main__':
     log_dir = 'test'
     os.makedirs(log_dir, exist_ok=True)
 
-    PS_dataset_train = Image_dataloader(ps_path, rectum_path, use_all = False, mode  = 'train')
+    PS_dataset_train = Image_dataloader(ps_path, csv_path, use_all = False, mode  = 'train')
     Data_sampler_train = DataSampler(PS_dataset_train)
 
     Biopsy_env_init = TemplateGuidedBiopsy_penalty(Data_sampler_train, results_dir = log_dir, max_num_steps = 100, reward_fn = 'patient', obs_space = 'both') #Data_sampler_train,
