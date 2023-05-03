@@ -27,6 +27,7 @@ class ActionFinder():
             self.map[idx] = [self.lesion_means[idx], self.needle_coords[idx]]
 
         self.remaining_idx = [i for i in range(NUM_LESIONS)]
+        self.visited_idx = []
 
     def find_closest_lesion(self, lesion_means, idx_map, starting_point):
         """
@@ -112,12 +113,17 @@ class ActionFinder():
 
         # Refine actions -> ie add firing (0 or 1) and move big actions to smaller ones (from 6 -> 2, 2, 2)
         refined_actions = self.refine_actions(relative_actions)
+        _, num_steps = np.shape(refined_actions)
+        idx_identifier = np.ones((1,num_steps))*closest_idx
+        #stacked_actions = np.vstack(refined_actions, lesion_idx)
+
 
         # Save visited idx, remove from map 
         self.remaining_idx.remove(closest_idx)
+        self.visited_idx.append(closest_idx)
         #print(f'Remaining idx {self.remaining_idx}')
 
-        return refined_actions, new_start_pos 
+        return refined_actions, new_start_pos, idx_identifier
 
     def refine_actions(self, actions):
         """
@@ -167,6 +173,11 @@ class ActionFinder():
         refined_actions = np.concatenate(refined_actions, axis = 1)
         
         return refined_actions 
+    
+    def return_visit_order(self):
+        print(f'Visited order : {self.visited_idx}')
+        return self.visited_idx
+
 
 class ImageReader:
 
@@ -227,7 +238,7 @@ class LabelLesions:
         lesion_diameter = [label_shape_filter.GetEquivalentEllipsoidDiameter(i) \
             for i in range(1, label_shape_filter.GetNumberOfLabels()+1)]
 
-        lesion_statistics = {'lesion_size' : lesion_size, 'lesion_bb' : lesion_bb, 'lesion_diameter' : lesion_diameter} 
+        lesion_statistics = {'lesion_size' : lesion_size, 'lesion_bb' : lesion_bb, 'lesion_diameter' : lesion_diameter, 'lesion_centroids' : lesion_centroids} 
 
         # Convert centroids from mm to pixel coords if not needed in mm 
         if not self.give_centroid_in_mm: 
@@ -862,7 +873,7 @@ if __name__ == '__main__':
     # Code extracts the best positions to place needles into (ie best grid positions)
     ps_path = '/Users/ianijirahmae/Documents/DATASETS/Data_by_modality'
     csv_path = '/Users/ianijirahmae/Documents/PhD_project/MRes_project/Reinforcement Learning/patient_data_multiple_lesions.csv'
-    labels_path = 'new_action_labels.h5'
+    labels_path = 'NEW_action_labels.h5'
     # H5PY Dataset for saving labels : change file name to what is convenient for you
     hf = h5py.File(labels_path, 'w')     
 
@@ -877,7 +888,7 @@ if __name__ == '__main__':
     grid_creater = GridArray()
 
 
-    for idx, (mri_vol, prostate_mask, tumour_mask, tumour_mask_sitk, rectum_pos, patient_name) in enumerate(PS_dataset_train):
+    for patient_idx, (mri_vol, prostate_mask, tumour_mask, tumour_mask_sitk, rectum_pos, patient_name) in enumerate(PS_dataset_train):
 
         empty_tumour_mask = (len(np.unique(tumour_mask)) == 1) # in tumour mask only 0s which means no tumour is present 
 
@@ -891,11 +902,10 @@ if __name__ == '__main__':
             ### 1. OBTAIN LESION CENTROIDS USING LABELLESIONS CLASS ###
             tumour_centroids, num_lesions, tumour_statistics, multiple_label_img = lesion_labeller(tumour_mask_sitk)
             bb_centroid, prostate_centroid = extract_volume_params(prostate_mask)
-
+            print(f"NUM LESIONS {num_lesions}")
             ### 2. FIND 4 NEEDLE GRID POSITIONS PER LESION USING GRIDLABELLER CLASS : grid_labels gives index of each needle position   ###
             # Obtain image projections of grid overlaid with lesion and prostate 
             img_overlay, grid, grid_points = grid_labeller.overlay_grid(prostate_mask, multiple_label_img, prostate_centroid)
-        
             lesion_overlay = grid_labeller.get_projection(multiple_label_img)
 
             # Obtain classification grid and binary array of 1s, 0s of best grid positions) 
@@ -921,16 +931,20 @@ if __name__ == '__main__':
 
             ### 3. OBTAIN ACTIONS PER TIME STEP USING ACTIONFINDER CLASS ###
             starting_point = np.array([0,0]) #initialise starting point as centre of grid 
-            all_actions = []
             
+            all_actions = []
+            all_identifiers = [] 
+
             action_mapper = ActionFinder(needle_means, needle_coords, starting_point)
 
             # Find actions for each lesion 
-            for idx in range(num_lesions):
-                rel_actions, starting_point = action_mapper.find_actions(starting_point)
+            for idx_l in range(num_lesions):
+                rel_actions, starting_point, idx_identifier = action_mapper.find_actions(starting_point)
                 all_actions.append(rel_actions)
+                all_identifiers.append(idx_identifier)
             all_actions = np.concatenate(all_actions, axis =1)
-
+            all_identifiers = np.concatenate(all_identifiers, axis = 1)
+            visited_idx = action_mapper.return_visit_order() 
 
             ### 4. OBTAIN STATES/OBSERVATIONS PER TIME STEP USING GRIDARRAY CLASS ###
             # Obtain updated grid position at each time step : 100 x 100 grid. 
@@ -987,8 +1001,11 @@ if __name__ == '__main__':
             group_folder.create_dataset('fired_grid_depth', data = fired_grid_depth)  # position of each grid position ; 200 x 200 x 2 to split for base and apex firing 
             group_folder.create_dataset('simple_grid', data = simple_grid) # position of each grid position ; 13 x 13 x 2 and split into base and apex firing 
             group_folder.create_dataset('idx_labels', data = grid_vals)# index of all needle grid positions fired (from 0-168); Shape Num_lesions x 4 
-
-            print('\n')
+            group_folder.create_dataset('lesion_size', data = tumour_statistics['lesion_size'])
+            group_folder.create_dataset('lesion_centroids', data = tumour_statistics['lesion_centroids'])
+            group_folder.create_dataset('lesion_img', data = lesion_overlay) # img with multiple lesion labels
+            group_folder.create_dataset('action_identifiers', data = all_identifiers)
+            #print('\n')
 
         
         # READING LABELS 
