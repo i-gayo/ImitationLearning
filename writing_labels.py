@@ -11,11 +11,37 @@ import csv
 import h5py
 #from utils import *
 
+import numpy as np
+from scipy.interpolate import griddata
+
+def interpolate_grid():
+    # Create a 13x13 grid with some sample data
+    x = np.linspace(-6, 6, 13)
+    y = np.linspace(-6, 6, 13)
+    X, Y = np.meshgrid(x, y)
+    Z = np.zeros([13,13])
+    Z[6,6] = 1 # set centre as 0 
+
+    # Create a 100x100 grid with coordinates that span the range of the 13x13 grid
+    xi = np.linspace(-50, 50, 100)
+    yi = np.linspace(-50, 50, 100)
+    XI, YI = np.meshgrid(xi, yi)
+
+    # Interpolate the 13x13 grid to the 100x100 grid using linear interpolation
+    ZI = griddata((X.flatten(), Y.flatten()), Z.flatten(), (XI, YI), method='linear', fill_value = 0)
+
+    # Plot the interpolated grid
+    import matplotlib.pyplot as plt
+    plt.imshow(ZI) #, origin='lower', extent=[0,1,0,1])
+    plt.colorbar()
+    plt.show()
+
 class ActionFinder():
 
-    def __init__(self, lesion_means, needle_coords, start_pos = np.array([0,0])):
+    def __init__(self, lesion_means, needle_coords, needle_depths, start_pos = np.array([0,0])):
         self.lesion_means = lesion_means
-        self.needle_coords = needle_coords 
+        self.needle_coords = needle_coords
+        self.needle_depths = needle_depths 
         self.start_pos = start_pos 
         self.action_maps = {3 : np.array([2,1]), 4 : np.array([2,2]), 5 : np.array([2,2,1]), 6 : np.array([2,2,2]), \
             7 : np.array([2,2,2,1]), 8 : np.array([2,2,2,2]), 9: np.array([2,2,2,2,1]), 10: np.array([2,2,2,2,2]), \
@@ -57,7 +83,7 @@ class ActionFinder():
         Returns closest points to starting point from chosen lesion 
         """
 
-        dif_vec = starting_point.reshape(2,1) - needle_coords[closest_lesion]
+        dif_vec = starting_point.reshape(2,1) - needle_coords[closest_lesion][:2, :]
         closest_idx = np.argsort(np.linalg.norm(dif_vec, axis = 0))
 
         return closest_idx 
@@ -72,7 +98,7 @@ class ActionFinder():
         
         # Obtain dif points (first element is starting point, next element are positions following needle coords)
         dif_points = np.zeros_like(reordered_points)
-        dif_points[:,0] = starting_point 
+        dif_points[:,0] = starting_point
         dif_points[:, 1:] = reordered_points[:, 0:-1]
         #print(f'Reordered points : \n {reordered_points}')
 
@@ -105,14 +131,15 @@ class ActionFinder():
         #print(f'Closest_idx : {closest_idx}')
         #print(f'Starting point {starting_point}')
         #print(f'Needle coords : {needle_coords[closest_idx]}')
+
         # Sample 4 needle points belonging to closest lesion. Point idx is order of close-ness
         points_idx = self.find_closest_points(self.needle_coords, closest_idx, starting_point)
 
         # Obtain relative actions 
-        relative_actions, new_start_pos = self.get_rel_actions(needle_coords[closest_idx], points_idx, starting_point)
+        relative_actions, new_start_pos = self.get_rel_actions(self.needle_coords[closest_idx], points_idx, starting_point)
 
         # Refine actions -> ie add firing (0 or 1) and move big actions to smaller ones (from 6 -> 2, 2, 2)
-        refined_actions = self.refine_actions(relative_actions)
+        refined_actions = self.refine_actions(relative_actions, self.needle_depths[closest_idx])
         _, num_steps = np.shape(refined_actions)
         idx_identifier = np.ones((1,num_steps))*closest_idx
         #stacked_actions = np.vstack(refined_actions, lesion_idx)
@@ -125,13 +152,14 @@ class ActionFinder():
 
         return refined_actions, new_start_pos, idx_identifier
 
-    def refine_actions(self, actions):
+    def refine_actions(self, actions, needle_depths):
         """
         
         Adds firing action delta_z
         Changes larger actions (greater than 10mm or 2 grid positions) to smaller discrete ones
 
         """
+
         num_needles = np.shape(actions)[1]
 
         refined_actions = [] 
@@ -139,6 +167,7 @@ class ActionFinder():
         for idx in range(num_needles):
 
             act = actions[:,idx]
+            depth = int(needle_depths[idx])
 
             paired_actions = [] 
 
@@ -165,7 +194,7 @@ class ActionFinder():
             new_actions[1, 0:len_actions[1]] = paired_actions[1]
             
             # Hit at the end of the split actions (ie when reached actual needle destination)
-            new_actions[2, -1] = 1
+            new_actions[2, -1] = depth
 
             refined_actions.append(new_actions)
         
@@ -177,7 +206,6 @@ class ActionFinder():
     def return_visit_order(self):
         print(f'Visited order : {self.visited_idx}')
         return self.visited_idx
-
 
 class ImageReader:
 
@@ -577,6 +605,7 @@ class GridLabeller:
             print('Chicken')
         
         fired_points = np.zeros((num_lesions, num_needles))
+        fired_depths = np.zeros((num_lesions, num_needles))
 
         # firing_grid with 2 points 
         simple_grid = np.zeros((13,13,2)) # first is apex, second is base 
@@ -600,16 +629,18 @@ class GridLabeller:
                 #print(f'Apex lesion: midpoint : {prostate_mid_point}, lesion_centre : {lesion_centre[-1]}')
                 for i in range(num_needles):
                     depth.append(0) # base
+                    fired_depths[idx, :] = 1 # base
             else:
                 #print(f'Base lesion : midpoint : {prostate_mid_point}, lesion_centre : {lesion_centre[-1]}')
                 for i in range(num_needles):
                     depth.append(1) # apex 
+                    fired_depths[idx, :] = 2
     
         fired_grid, fired_grid_depth = self.get_fired_grid(fired_points, grid_coords, depth)
         small_grid, small_grid_depth = self.get_small_grid(np.concatenate(fired_points), depth)
         simple_grid = self.get_simple_grid(np.concatenate(fired_points), depth)
         
-        return fired_points, fired_grid, fired_grid_depth, small_grid, small_grid_depth, simple_grid
+        return fired_points, fired_grid, fired_grid_depth, small_grid, small_grid_depth, simple_grid, fired_depths
 
     def get_labels_per_step(self, prostate_mask, tumour_centroids, grid, num_needles = 3):
         """
@@ -868,6 +899,39 @@ def extract_volume_params(binary_mask):
 
     return bb_values, centroid 
 
+def get_needle_obs(needle_coords):
+    """
+    A function that obtains needle trajectory, given chosen grid position 
+
+    Parameters:
+    -----------
+    needle_coords : x, y, z where z is [0, 1, 2] where 0 is non-fired ie empty needle, 1 is base, 2 is apex 
+
+    Returns:
+    ----------
+    needle_obs : 100 x 100 x 24 array of needle position 
+
+    """
+
+    depth = 24 
+    # apex : up to halfway (apex hit)
+    # base : up to fullway (base hit)
+    depth_map = {'0' : 0, '1' : int(0.5*depth), '2' : depth}
+
+    # initialise empty obs 
+    obs = np.zeros((100, 100, 24))
+
+    # using needle x,y define obs
+    x_coords = 5#TODO
+    y_coords = 5#TODO 
+    z_depth = depth_map[needle_coords[2]]
+
+    # 
+    if z_depth != 0:
+        obs[y_coords-1 : y_coords +2, x_coords - 1 : x_coords +2, 0:z_depth] = 1
+
+    return obs 
+
 if __name__ == '__main__':
 
     # Code extracts the best positions to place needles into (ie best grid positions)
@@ -875,7 +939,7 @@ if __name__ == '__main__':
     csv_path = '/Users/ianijirahmae/Documents/PhD_project/MRes_project/Reinforcement Learning/patient_data_multiple_lesions.csv'
     labels_path = 'NEW_action_labels.h5'
     # H5PY Dataset for saving labels : change file name to what is convenient for you
-    hf = h5py.File(labels_path, 'w')     
+    #hf = h5py.File(labels_path, 'w')     
 
     # Define dataloader and lesion labellers : use to load patietn volumes in 
     PS_dataset_train = Image_dataloader(ps_path, csv_path, use_all = True, mode  = 'all')
@@ -909,7 +973,7 @@ if __name__ == '__main__':
             lesion_overlay = grid_labeller.get_projection(multiple_label_img)
 
             # Obtain classification grid and binary array of 1s, 0s of best grid positions) 
-            grid_labels, fired_grid, fired_grid_depth, small_fired_grid, small_fired_grid_depth, simple_grid = grid_labeller.get_labels(prostate_mask, tumour_centroids, grid_points, num_needles = 4) 
+            grid_labels, fired_grid, fired_grid_depth, small_fired_grid, small_fired_grid_depth, simple_grid, fired_depths = grid_labeller.get_labels(prostate_mask, tumour_centroids, grid_points, num_needles = 4) 
             combined_grid = np.sum(simple_grid, axis = 2)
 
             # To find coords for each lesion 
@@ -920,13 +984,16 @@ if __name__ == '__main__':
             
             # Finding coordinates of needle points per lesion 
             needle_coords = [] 
+            needle_depths = [] 
 
             # Iterate through each lesion, obtain grid positions of each needle fired 
-            for points in (grid_labels):
+            for idx, points in enumerate((grid_labels)):
                 idx_vals = [int(idx) for idx in points] # convert from float to int 
                 needle_coords.append(np.array([x_[idx_vals], y_[idx_vals]])) # obtain x,y coordinate on grid 
+                needle_depths.append(fired_depths[idx,:])
 
-            needle_means = [np.mean(points, axis = 1) for points in needle_coords]  # mean coords of each needle points per lesion 
+            needle_means = [np.mean(points[0:2], axis = 1) for points in needle_coords]  # mean coords of each needle points per lesion 
+
             print(f'Needle means \n {needle_means}')
 
             ### 3. OBTAIN ACTIONS PER TIME STEP USING ACTIONFINDER CLASS ###
@@ -935,11 +1002,12 @@ if __name__ == '__main__':
             all_actions = []
             all_identifiers = [] 
 
-            action_mapper = ActionFinder(needle_means, needle_coords, starting_point)
+            action_mapper = ActionFinder(needle_means, needle_coords, needle_depths, starting_point)
 
             # Find actions for each lesion 
             for idx_l in range(num_lesions):
                 rel_actions, starting_point, idx_identifier = action_mapper.find_actions(starting_point)
+                print(rel_actions)
                 all_actions.append(rel_actions)
                 all_identifiers.append(idx_identifier)
             all_actions = np.concatenate(all_actions, axis =1)
@@ -990,22 +1058,22 @@ if __name__ == '__main__':
             grid_vals = np.concatenate(grid_labels)
 
             # Save to h5py file 
-            group_folder = hf.create_group(file_path)
+            # group_folder = hf.create_group(file_path)
 
-            # save per-timestep actions 
-            group_folder.create_dataset('all_actions', data = all_actions) # actions at each time step from 0:T-1 where T is number of timesteps taken ; N x 3 
-            group_folder.create_dataset('all_grids', data = all_grids_array) # grid arrays at each time step from 0:T-1 where T is number of timesteps taken ; N x 100 x 100 
-            group_folder.create_dataset('fired_grid', data = fired_grid) # position of all grid coords to be fired ; 200 x 200 
+            # # save per-timestep actions 
+            # group_folder.create_dataset('all_actions', data = all_actions) # actions at each time step from 0:T-1 where T is number of timesteps taken ; N x 3 
+            # group_folder.create_dataset('all_grids', data = all_grids_array) # grid arrays at each time step from 0:T-1 where T is number of timesteps taken ; N x 100 x 100 
+            # group_folder.create_dataset('fired_grid', data = fired_grid) # position of all grid coords to be fired ; 200 x 200 
 
-            # save grids used for alternative supervised learning : predict all grid positions together 
-            group_folder.create_dataset('fired_grid_depth', data = fired_grid_depth)  # position of each grid position ; 200 x 200 x 2 to split for base and apex firing 
-            group_folder.create_dataset('simple_grid', data = simple_grid) # position of each grid position ; 13 x 13 x 2 and split into base and apex firing 
-            group_folder.create_dataset('idx_labels', data = grid_vals)# index of all needle grid positions fired (from 0-168); Shape Num_lesions x 4 
-            group_folder.create_dataset('lesion_size', data = tumour_statistics['lesion_size'])
-            group_folder.create_dataset('lesion_centroids', data = tumour_statistics['lesion_centroids'])
-            group_folder.create_dataset('lesion_img', data = lesion_overlay) # img with multiple lesion labels
-            group_folder.create_dataset('action_identifiers', data = all_identifiers)
-            #print('\n')
+            # # save grids used for alternative supervised learning : predict all grid positions together 
+            # group_folder.create_dataset('fired_grid_depth', data = fired_grid_depth)  # position of each grid position ; 200 x 200 x 2 to split for base and apex firing 
+            # group_folder.create_dataset('simple_grid', data = simple_grid) # position of each grid position ; 13 x 13 x 2 and split into base and apex firing 
+            # group_folder.create_dataset('idx_labels', data = grid_vals)# index of all needle grid positions fired (from 0-168); Shape Num_lesions x 4 
+            # group_folder.create_dataset('lesion_size', data = tumour_statistics['lesion_size'])
+            # group_folder.create_dataset('lesion_centroids', data = tumour_statistics['lesion_centroids'])
+            # group_folder.create_dataset('lesion_img', data = lesion_overlay) # img with multiple lesion labels
+            # group_folder.create_dataset('action_identifiers', data = all_identifiers)
+            # #print('\n')
 
         
         # READING LABELS 
