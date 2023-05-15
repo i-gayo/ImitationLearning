@@ -10,6 +10,7 @@ import copy
 import csv 
 import h5py
 #from utils import *
+import torch 
 
 import numpy as np
 from scipy.interpolate import griddata
@@ -35,6 +36,21 @@ def interpolate_grid():
     plt.imshow(ZI) #, origin='lower', extent=[0,1,0,1])
     plt.colorbar()
     plt.show()
+
+def interpolate_tensor(input_tensor):
+    # Reshape the input tensor to have a batch size of 1
+    input_tensor = input_tensor.unsqueeze(0)
+    
+    # Define the desired output size
+    output_size = (100, 100, 24)
+    
+    # Use PyTorch's interpolate function to upsample the input tensor
+    output_tensor = torch.nn.functional.interpolate(input_tensor, size=output_size, mode='trilinear')
+    
+    # Remove the batch dimension from the output tensor
+    output_tensor = output_tensor.squeeze(0)
+    
+    return output_tensor
 
 class ActionFinder():
 
@@ -841,6 +857,36 @@ class GridArray():
 
         return grid_array, self.saved_grid
 
+    def create_needle_vol(self, action, max_depth):
+        """
+        A function that creates needle volume 100 x 100 x 24 
+        """
+        
+        needle_vol = np.zeros([100,100,24])
+
+        x_idx = action[1]*5
+        y_idx = action[0]*5
+        needle_fired = (action[2] == 1)
+
+        #Converts range from (-30,30) to image grid array
+        x_idx = (x_idx) + 50
+        y_idx = (y_idx) + 50
+
+        x_grid_pos = int(x_idx)
+        y_grid_pos = int(y_idx)
+
+        depth_map = {0 : 0, 1 : int(0.5*max_depth), 2 : max_depth}
+        depth = depth_map[int(action[2])]
+
+        if int(action[2]) == 2:
+            print('chicekn')
+
+        if depth != 0:
+            needle_vol[y_grid_pos-1:y_grid_pos+ 2, x_grid_pos-1:x_grid_pos+2, 0:depth ] = 1
+
+        return needle_vol 
+
+
 def extract_volume_params(binary_mask):
     
     """ 
@@ -937,9 +983,9 @@ if __name__ == '__main__':
     # Code extracts the best positions to place needles into (ie best grid positions)
     ps_path = '/Users/ianijirahmae/Documents/DATASETS/Data_by_modality'
     csv_path = '/Users/ianijirahmae/Documents/PhD_project/MRes_project/Reinforcement Learning/patient_data_multiple_lesions.csv'
-    labels_path = 'NEW_action_labels.h5'
+    labels_path = 'ACTION_OBS_LABELS.h5'
     # H5PY Dataset for saving labels : change file name to what is convenient for you
-    #hf = h5py.File(labels_path, 'w')     
+    hf = h5py.File(labels_path, 'w')     
 
     # Define dataloader and lesion labellers : use to load patietn volumes in 
     PS_dataset_train = Image_dataloader(ps_path, csv_path, use_all = True, mode  = 'all')
@@ -951,6 +997,7 @@ if __name__ == '__main__':
     grid_labeller = GridLabeller() # obtains needle grid positions for each lesion 
     grid_creater = GridArray()
 
+    all_max_depth = []   
 
     for patient_idx, (mri_vol, prostate_mask, tumour_mask, tumour_mask_sitk, rectum_pos, patient_name) in enumerate(PS_dataset_train):
 
@@ -966,6 +1013,12 @@ if __name__ == '__main__':
             ### 1. OBTAIN LESION CENTROIDS USING LABELLESIONS CLASS ###
             tumour_centroids, num_lesions, tumour_statistics, multiple_label_img = lesion_labeller(tumour_mask_sitk)
             bb_centroid, prostate_centroid = extract_volume_params(prostate_mask)
+
+            # downsampled prostate mask 
+            ds_prostate_mask = prostate_mask[::2,::2,::4]
+            max_depth = np.max(np.where(ds_prostate_mask == 1)[-1])
+            all_max_depth.append(int(max_depth))
+
             print(f"NUM LESIONS {num_lesions}")
             ### 2. FIND 4 NEEDLE GRID POSITIONS PER LESION USING GRIDLABELLER CLASS : grid_labels gives index of each needle position   ###
             # Obtain image projections of grid overlaid with lesion and prostate 
@@ -1001,6 +1054,7 @@ if __name__ == '__main__':
             
             all_actions = []
             all_identifiers = [] 
+            all_needle_vol = [] 
 
             action_mapper = ActionFinder(needle_means, needle_coords, needle_depths, starting_point)
 
@@ -1020,13 +1074,16 @@ if __name__ == '__main__':
 
             NUM_ACTIONS = np.shape(all_actions)[1]
             all_grids = [] 
+            all_current_pos = [] 
 
             # Starting pos 
             current_pos = np.array([0.,0.,0.])
+
             for idx in range(NUM_ACTIONS):
                 
                 # iterate through each time step and obtain actions at each time step 
                 action_set = all_actions[:,idx]
+                all_current_pos.append(copy.deepcopy(current_pos))
                 #print(f'Action set : {action_set}')
                 
                 # First position, current pos is (0,0) 
@@ -1038,18 +1095,26 @@ if __name__ == '__main__':
                     template_grid[50,50] = 0.25 # current position = 0.25 
                     all_grids.append(template_grid)
                     
+                    # create needle vol 
+                    needle_vol = grid_creater.create_needle_vol(current_pos, max_depth)
                 else: 
                     # Update grid array 
                     grid_array, grid_his = grid_creater.create_grid_array(current_pos, grid_array)
                     all_grids.append(grid_array)
 
+                    needle_vol = grid_creater.create_needle_vol(current_pos, max_depth)
+
                 # Update new position 
                 current_pos[2] = action_set[2] # z position : 0 if not-fired, 1 if fired 
                 current_pos[0:2] += action_set[0:2] # new_pos = current_pos + (delta_x, delta_y)
-
+                all_needle_vol.append(needle_vol)
+                print(f'Current pos: {current_pos}')
+            
             # Stack all actions and observations 
             all_grids_array = np.stack(all_grids)
             all_actions = np.transpose(all_actions)
+            all_pos = np.stack(all_current_pos)
+            all_vol = np.stack(all_needle_vol)
 
             print('Chicken')
 
@@ -1058,22 +1123,23 @@ if __name__ == '__main__':
             grid_vals = np.concatenate(grid_labels)
 
             # Save to h5py file 
-            # group_folder = hf.create_group(file_path)
+            group_folder = hf.create_group(file_path)
 
-            # # save per-timestep actions 
-            # group_folder.create_dataset('all_actions', data = all_actions) # actions at each time step from 0:T-1 where T is number of timesteps taken ; N x 3 
-            # group_folder.create_dataset('all_grids', data = all_grids_array) # grid arrays at each time step from 0:T-1 where T is number of timesteps taken ; N x 100 x 100 
-            # group_folder.create_dataset('fired_grid', data = fired_grid) # position of all grid coords to be fired ; 200 x 200 
+            # save per-timestep actions 
+            group_folder.create_dataset('all_actions', data = all_actions) # actions at each time step from 0:T-1 where T is number of timesteps taken ; N x 3 
+            group_folder.create_dataset('all_grids', data = all_grids_array) # grid arrays at each time step from 0:T-1 where T is number of timesteps taken ; N x 100 x 100 
+            group_folder.create_dataset('fired_grid', data = fired_grid) # position of all grid coords to be fired ; 200 x 200 
 
-            # # save grids used for alternative supervised learning : predict all grid positions together 
-            # group_folder.create_dataset('fired_grid_depth', data = fired_grid_depth)  # position of each grid position ; 200 x 200 x 2 to split for base and apex firing 
-            # group_folder.create_dataset('simple_grid', data = simple_grid) # position of each grid position ; 13 x 13 x 2 and split into base and apex firing 
-            # group_folder.create_dataset('idx_labels', data = grid_vals)# index of all needle grid positions fired (from 0-168); Shape Num_lesions x 4 
-            # group_folder.create_dataset('lesion_size', data = tumour_statistics['lesion_size'])
-            # group_folder.create_dataset('lesion_centroids', data = tumour_statistics['lesion_centroids'])
-            # group_folder.create_dataset('lesion_img', data = lesion_overlay) # img with multiple lesion labels
-            # group_folder.create_dataset('action_identifiers', data = all_identifiers)
-            # #print('\n')
+            # save grids used for alternative supervised learning : predict all grid positions together 
+            group_folder.create_dataset('fired_grid_depth', data = fired_grid_depth)  # position of each grid position ; 200 x 200 x 2 to split for base and apex firing 
+            group_folder.create_dataset('simple_grid', data = simple_grid) # position of each grid position ; 13 x 13 x 2 and split into base and apex firing 
+            group_folder.create_dataset('idx_labels', data = grid_vals)# index of all needle grid positions fired (from 0-168); Shape Num_lesions x 4 
+            group_folder.create_dataset('lesion_size', data = tumour_statistics['lesion_size'])
+            group_folder.create_dataset('lesion_centroids', data = tumour_statistics['lesion_centroids'])
+            group_folder.create_dataset('lesion_img', data = lesion_overlay) # img with multiple lesion labels
+            group_folder.create_dataset('action_identifiers', data = all_identifiers)           #print('\n')
+            #group_folder.create_dataset('needle_vol', data = all_vol)         #print('\n')
+            group_folder.create_dataset('current_pos', data = all_pos)  
 
         
         # READING LABELS 
