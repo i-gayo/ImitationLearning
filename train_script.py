@@ -990,14 +990,12 @@ class TimeStep_data_new(Dataset):
         NUM_ACTIONS = np.shape(all_actions)[0]
 
         # Create needle vol array for all positions 
-        print('chicken')
 
         needle_vol = []
         for pos_idx in range(NUM_ACTIONS):
             current_pos = all_pos[pos_idx,:]
             needle_vol.append(self.vol_creater.create_needle_vol(current_pos, max_depth))
 
-        print('chicken')
         # Randomly sample idx from 0: T-3 (num_actions-2 because anrage aranges from 0 to n-1 val)
         if self.finetune: 
             random_idx = 0 # finetune only with first frames, to let agent know how to start the actions with different datasets!!! 
@@ -1171,12 +1169,20 @@ def train_pertimestep(model, agent, train_dataloader, val_dataloader, num_epochs
         with torch.no_grad():
             acc_epoch = torch.mean(torch.tensor((acc_vals)))
             loss_epoch = torch.mean(torch.tensor((loss_vals)))
+
+            # metrics 
             hr_epoch = torch.mean(torch.tensor(np.concatenate(hr_vals)))
-            ccl_epoch = torch.mean(torch.tensor(np.concatenate(ccl_vals)))
+            ccl_epoch = torch.mean(torch.tensor(np.concatenate(ccl_vals)).float())
             dist_epoch = torch.mean(torch.tensor(np.concatenate(dist_vals)))
 
+            # compute std 
+            hr_std = torch.mean(torch.tensor(np.concatenate(hr_vals)))
+            ccl_std = torch.mean(torch.tensor(np.concatenate(ccl_vals)).float())
+            dist_std = torch.mean(torch.tensor(np.concatenate(dist_vals)))
+
+
         print(f'\n Epoch : {epoch_no} Average loss : {loss_epoch:5f} average RMSE {acc_epoch:5f}')
-        print(f'Metrics : HR {hr_epoch}, CCL : {ccl_epoch}, dist metric : {dist_epoch}')
+        print(f'Metrics : HR {hr_epoch} +- {hr_std}, CCL : {ccl_epoch} +- {ccl_std}, dist metric : {dist_epoch} +- {dist_std}')
 
         with open(csv_train_path, 'a') as fp: 
             loss_points = np.stack([epoch_no, loss_epoch]).reshape(1,-1)
@@ -1431,7 +1437,6 @@ def compute_dist_to_lesion(grid_obs, actions, action_identifier, tumour_centroid
 
     return sign_dist, np.mean(sign_dist)
      
-
 def compute_DIST(obs, actions, tumour_centroid):
     """
     Computes distance to closest lesion and whether agents' step is closer or further away than current position 
@@ -1452,9 +1457,8 @@ def compute_DIST(obs, actions, tumour_centroid):
     scaled_actions = (raw_actions[:, :-1] * 5 * 2) # only using x, y; multiply by 5 to get 5mm intervals; multiply by 2 because previously normalised by dividing by 2 so unormalising now 
     new_grid_pos = (scaled_actions + current_grid_pos) # y x z 
 
-
     # Compute distance between new position (current + action) and target lesion 
-    # change tumour_centroid from
+    # change tumour_centroid from x y z to y x z
     swapped_centres = tumour_centroid[:, [1,0,2]]
 
     # compute distance for each row 
@@ -1467,8 +1471,6 @@ def compute_DIST(obs, actions, tumour_centroid):
 
     return sign_dist, np.mean(sign_dist)
      
-
-
 def compute_HR(obs, actions):
     """
     Compute both HR and CCL using observations 
@@ -1522,7 +1524,6 @@ def compute_HR(obs, actions):
 
     return hit_array, ccl_array
 
-
 # Networks to use for training 
 class FeatureExtractor(BaseFeaturesExtractor):
     """
@@ -1542,7 +1543,7 @@ class FeatureExtractor(BaseFeaturesExtractor):
         #num_multiple_frames = observation_space.shape[-1]
         #self.num_multiple_frames = num_multiple_frames
 
-        num_channels =5 
+        num_channels = 5 
         self.cnn_layers = nn.Sequential(
 
             # First layer like resnet, stride = 2
@@ -1716,8 +1717,7 @@ if __name__ =='__main__':
         policy_kwargs = dict(features_extractor_class = FeatureExtractor, \
         features_extractor_kwargs=dict(multiple_frames = True, num_multiple_frames = 3), activation_fn = torch.nn.Tanh)
         agent = PPO(CustomActorCriticPolicy, Biopsy_env, policy_kwargs = policy_kwargs, tensorboard_log = LOG_DIR)
-    else:
-        
+    else:  
         policy_kwargs = dict(features_extractor_class = FeatureExtractor, features_extractor_kwargs=dict(multiple_frames = True, num_multiple_frames = 3))  # defines feature extractor to be used for network 
         agent = PPO(CnnPolicy, Biopsy_env, policy_kwargs = policy_kwargs, device = device_cuda, tensorboard_log = LOG_DIR)
 
