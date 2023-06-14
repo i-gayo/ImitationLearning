@@ -36,7 +36,7 @@ parser.add_argument('--log_dir',
                     metavar='log_dir',
                     type=str,
                     action='store',
-                    default='Timestep_vit',
+                    default='Timestep',
                     help='Log dir to save results to')
 
 parser.add_argument('--loss_fn',
@@ -90,7 +90,7 @@ parser.add_argument('--feature_extractor',
                     metavar='feature_extractor',
                     type=str,
                     action='store',
-                    default='vit',
+                    default='efficient',
                     help='Which feature extractor to use')
 
 def round_to_05(val):
@@ -913,9 +913,9 @@ class TimeStep_data_steps(Dataset):
         self.single_patient = single_patient
         
         # Obtain list of patient names with multiple lesions -> change to path name
-        df_dataset = pd.read_csv('/raid/candi/Iani/Biopsy_RL/patient_data_multiple_lesions.csv')
+        #df_dataset = pd.read_csv('/raid/candi/Iani/Biopsy_RL/patient_data_multiple_lesions.csv')
         #z3df_dataset = pd.read_csv('/Users/ianijirahmae/Documents/PhD_project/MRes_project/Reinforcement Learning/patient_data_multiple_lesions.csv')
-        #df_dataset = pd.read_csv(csv_path)
+        df_dataset = pd.read_csv(csv_path)
         self.all_file_names = df_dataset['patient_name'].tolist()
         self.num_lesions = df_dataset[' num_lesions'].tolist()
 
@@ -2640,30 +2640,27 @@ if __name__ =='__main__':
 
     # TODO - change to your own paths 
     PS_PATH = '/Users/ianijirahmae/Documents/DATASETS/Data_by_modality'
-    CSV_PATH = '/raid/candi/Iani/Biopsy_RL/patient_data_multiple_lesions.csv'
-    
-    # also the same as labels for n2n ; considers only single lesions at a time 
-    LABELS_PATH_C2L = '/raid/candi/Iani/Biopsy_RL/ACTION_OBS_SINGLE_LESIONS_LABELS.h5'
-    
-    # also the same as labels for e2e ie end to end, sequential timesteps from start to end of policy
-    LABELS_PATH_L2L = '/raid/candi/Iani/Biopsy_RL/NEWNEW_ACTION_OBS_LABELS.h5'
-    
-    # LABEL PATH IF JUST DOING E2E TRAINING ONLY 
-    LABELS_PATH_ALL = '/Users/ianijirahmae/Documents/PhD_project/Biopsy_RL/action_labels.h5'
-    
-    ### Path files for PT
-    args = parser.parse_args()
+    CSV_PATH = '/Users/ianijirahmae/Documents/PhD_project/MRes_project/Reinforcement Learning/patient_data_multiple_lesions.csv'
     #PS_PATH = '/raid/candi/Iani/MRes_project/Reinforcement Learning/DATASETS/'
     #CSV_PATH = '/raid/candi/Iani/Biopsy_RL/patient_data_multiple_lesions.csv'
     
+    # also the same as labels for n2n ; considers only single lesions at a time 
+    LABELS_PATH_C2L = '/Users/ianijirahmae/ImitationLearning/ACTION_OBS_SINGLE_LESIONS_LABELS.h5'
+    
+    # also the same as labels for e2e ie end to end, sequential timesteps from start to end of policy
+    LABELS_PATH_L2L = '/Users/ianijirahmae/ImitationLearning/NEW_ACTION_OBS_LABELS.h5'
+    
+    # LABEL PATH IF JUST DOING E2E TRAINING ONLY 
+    LABELS_PATH_ALL = '/Users/ianijirahmae/Documents/PhD_project/Biopsy_RL/action_labels.h5'
+
+    # Parse arguments 
+    args = parser.parse_args()
     data_mode = args.data_mode
     print(f"Using data mode : {data_mode}")
     training_strategy = args.train_strategy
 
     LOG_DIR = args.log_dir  
     TRAIN_MODE = 'train'
-    DEBUGGING = args.debugging
-    USING_OLD_OBS = args.use_old_obs
     USING_RL = args.using_rl 
     FEATURE_EXTRACTOR = args.feature_extractor
 
@@ -2671,12 +2668,9 @@ if __name__ =='__main__':
     device_cuda = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f'Device : {device_cuda}')
 
-    # Training process parameters
-    use_custom_policy = args.use_custom_policy
     clip_actions = args.clip_actions
-    print(f'Clipped actions : {clip_actions} ; using custom policy with tanh : {use_custom_policy}')
-    print(f"Debugging mode : {DEBUGGING}")
-
+    print(f'Clipped actions : {clip_actions}')
+    
     # SETTING UP RL ENVIRONMENT to use RL architecture 
     PS_dataset = Image_dataloader(PS_PATH, use_all = True, mode  = TRAIN_MODE)
     Data_sampler= DataSampler(PS_dataset)
@@ -2696,7 +2690,7 @@ if __name__ =='__main__':
         print(f"Not using RL networks ; using feature extractor {FEATURE_EXTRACTOR}")
         
         if FEATURE_EXTRACTOR == 'efficient':
-            print(f"Using feature extractor VIT")
+            print(f"Using feature extractor efficient")
             FEATURES_DIM = 512
             INPUT_CHANNELS = 5
             feature_net = EfficientNet3D.from_name("efficientnet-b0",  override_params={'num_classes': FEATURES_DIM}, in_channels=INPUT_CHANNELS)
