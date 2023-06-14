@@ -140,7 +140,7 @@ class Conv3dStaticSamePadding(nn.Conv3d):
     def forward(self, x):
         x = self.static_padding(x)
         #print(f"x size : {x.size()}")
-        print(f"weights size {self.weight.size()}")
+        #print(f"weights size {self.weight.size()}")
         # use padding x = (1,1,1)
         #padding = (1,1,1)
         x = F.conv3d(x, self.weight, self.bias, self.stride, self.padding, self.dilation, self.groups)

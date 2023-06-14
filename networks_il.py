@@ -88,7 +88,7 @@ class EfficientNet3D(nn.Module):
         # TODO : if idx >= 11: break ; provide features!!! :) 
         
         for idx, block in enumerate(self._blocks):
-            print(f"Block : {idx} \n")
+            #print(f"Block : {idx} \n")
             if idx >= 11:
                 break
             
@@ -293,10 +293,10 @@ class ActorCritic_network(nn.Module):
                 # ACTION AND VALUE EXTRACTOR 
         observations = observations.float()
         features = self.features_extractor(observations)
-        action_output = self.action_net(features)
-        value_output = self.value_net(features)
+        #action_output = self.action_net(features)
+        #value_output = self.value_net(features)
 
-        return self.forward_actor(action_output), self.forward_critic(value_output), features
+        return self.forward_actor(features), self.forward_critic(features), features
     
     def forward_actor(self, features: torch.Tensor) -> torch.Tensor:
         return self.policy_net(features)
