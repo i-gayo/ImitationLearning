@@ -286,7 +286,7 @@ class ActorCritic_network(nn.Module):
         #self.FeatureExtractor = EfficientNet3D.from_name("efficientnet-b1",  override_params={'num_classes': features_dim}, in_channels=in_channels)
         
         self.features_extractor = FeaturesExtractor
-        self.action_net = nn.Sequential(nn.Linear(features_dim, num_actions), nn.Tanh())
+        self.policy_net = nn.Sequential(nn.Linear(features_dim, num_actions), nn.Tanh())
         self.value_net = nn.Sequential(nn.Linear(features_dim, 1))
 
     def forward(self, observations: torch.Tensor):
@@ -296,7 +296,13 @@ class ActorCritic_network(nn.Module):
         action_output = self.action_net(features)
         value_output = self.value_net(features)
 
-        return action_output, value_output, features
+        return self.forward_actor(action_output), self.forward_critic(value_output), features
+    
+    def forward_actor(self, features: torch.Tensor) -> torch.Tensor:
+        return self.policy_net(features)
+
+    def forward_critic(self, features: torch.Tensor) -> torch.Tensor:
+        return self.value_net(features)
     
 if __name__ == '__main__':
     
