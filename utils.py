@@ -281,18 +281,18 @@ class GridLabeller:
 
 class Image_dataloader(Dataset):
 
-    def __init__(self, folder_name, mode = 'train', use_all = False):
+    def __init__(self, folder_name, csv_path, mode = 'train', use_all = False):
         
         self.folder_name = folder_name
         self.mode = mode
         #self.rectum_df = pd.read_csv(rectum_file)
-        #self.all_file_names = self._get_patient_list(os.path.join(self.folder_name, 'lesion'))
+        self.all_file_names = self._get_patient_list(os.path.join(self.folder_name, 'lesion'))
 
         # Obtain list of patient names with multiple lesions -> change to path name
         #df_dataset = pd.read_csv('./patient_data_multiple_lesions.csv')
-        df_dataset = pd.read_csv('/Users/ianijirahmae/Documents/PhD_project/MRes_project/Reinforcement Learning/patient_data_multiple_lesions.csv')
-        self.all_file_names = df_dataset['patient_name'].tolist()
-        self.num_lesions = df_dataset[' num_lesions'].tolist()
+        df_dataset = pd.read_csv(csv_path)
+        #self.all_file_names = df_dataset['patient_name'].tolist()
+        #self.num_lesions = df_dataset[' num_lesions'].tolist()
 
         # Train with all patients 
         if use_all:
@@ -304,6 +304,7 @@ class Image_dataloader(Dataset):
             val_len = size_dataset - (train_len + test_len)
 
             # both test and val have simila rnumber of lesions (mean = 2.4 lesions)
+            self.all_names = self.all_file_names
             self.train_names = self.all_file_names[0:train_len]
             self.val_names = self.all_file_names[train_len:train_len + val_len]
             self.test_names = self.all_file_names[train_len + val_len:]
@@ -324,7 +325,8 @@ class Image_dataloader(Dataset):
             #Defining length of datasets
             #size_dataset = len(self.all_file_names)
  
-        self.dataset_len = {'train' : train_len, 'test': test_len, 'val' : val_len}
+
+        self.dataset_len = {'train' : train_len, 'test': test_len, 'val' : val_len, 'all' : size_dataset}
 
         # Folder names
         self.lesion_folder = os.path.join(folder_name, 'lesion')
@@ -380,6 +382,9 @@ class Image_dataloader(Dataset):
         elif self.mode == 'test':
             #idx_ = idx + self.dataset_len['train'] + self.dataset_len['val']
             patient_name = self.test_names[idx]
+
+        elif self.mode == 'all':
+            patient_name = self.all_names[idx]
 
         # Read prostate mask, lesion mask, prostate mask separately using ImageReader    
         #patient_name = self.all_file_names[idx_]
