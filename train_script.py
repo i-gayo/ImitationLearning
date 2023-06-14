@@ -36,7 +36,7 @@ parser.add_argument('--log_dir',
                     metavar='log_dir',
                     type=str,
                     action='store',
-                    default='Timestep',
+                    default='IL_agent',
                     help='Log dir to save results to')
 
 parser.add_argument('--loss_fn',
@@ -81,7 +81,7 @@ parser.add_argument('--train_strategy',
 
 parser.add_argument('--using_rl',
                     metavar='using_rl',
-                    type=bool,
+                    type=str,
                     action='store',
                     default=False,
                     help='Whether to use RL networks or not')
@@ -111,7 +111,7 @@ def compute_new_obs(current_pos, actions, max_depth):
     new_pos = torch.zeros_like(grid_pos)
     new_pos[:, 0:2] = round_to_05((grid_pos[:,0:2] + all_actions[:,0:2]) * 2)#(because normalised between (-1,1) from (-2,2))
 
-    # un-normalise actions[-1] from (-1,1) -> (0,1,2)where 0 is non-fired, 1 is apex, 2 is base 
+    # unnormalise action from (-1,1)to  (0,1,2)where 0 is non-fired, 1 is apex, 2 is base 
     all_0 = (all_actions[:,-1] <= -0.33) # 0 < x <= -0.33 : 0
     all_1 = ((all_actions[:,-1] > -0.33) * (all_actions[:,-1] <=0.33))*2    # 0.33 < x <= 0.33 : 1
     all_2 = (all_actions[:,-1] > 0.33)*3    # 0.33 <= x < 1 : 2
@@ -255,7 +255,7 @@ def compute_DIST(obs, actions, tumour_centroid):
 
     # sign : (dist_t+1 - dist_t) if +ve -> moving closer. If not, moving further away! --> gives indication of gradient. 
     sign_dist = np.sign(dist_t0 - dist_t1) # if t0 > t1 -> getting closer to centroid 
-    print(f'Sign(dist_t - dist_t+1 : {sign_dist} average : {np.mean(sign_dist)} +- {np.std(sign_dist)}')
+    #print(f'Sign(dist_t - dist_t+1 : {sign_dist} average : {np.mean(sign_dist)} +- {np.std(sign_dist)}')
 
     return sign_dist, np.mean(sign_dist)
 
@@ -2658,12 +2658,24 @@ if __name__ =='__main__':
     data_mode = args.data_mode
     print(f"Using data mode : {data_mode}")
     training_strategy = args.train_strategy
-
-    LOG_DIR = args.log_dir  
     TRAIN_MODE = 'train'
-    USING_RL = args.using_rl 
+    USING_RL = (args.using_rl == 'True') or (args.using_rl == 'true')
     FEATURE_EXTRACTOR = args.feature_extractor
 
+    # SAVE LOG FILE NAME WITH PARAMETERS CHOSEN 
+    if args.log_dir == 'IL_agent': 
+        #ie remains unchanged
+        if USING_RL:
+            print(f"Using RL: {USING_RL}")
+            LOG_DIR = 'IL_' + training_strategy + '_RL_'
+        else:
+            print(f"Not using RL:")
+            LOG_DIR = 'IL_' + training_strategy + '_NRL_' + FEATURE_EXTRACTOR
+    else:
+        LOG_DIR = args.log_dir  
+
+    print(f"Saving all results/models to folder : {LOG_DIR}")
+    
     use_cuda = torch.cuda.is_available()
     device_cuda = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f'Device : {device_cuda}')
