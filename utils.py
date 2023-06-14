@@ -10,8 +10,6 @@ from networks import *
 from torch.utils.tensorboard import SummaryWriter
 
 
-### Image analysis classes 
-
 def extract_volume_params(binary_mask):
     
     """ 
@@ -283,11 +281,10 @@ class GridLabeller:
 
 class Image_dataloader(Dataset):
 
-    def __init__(self, folder_name, rectum_file, mode = 'train', use_all = False):
+    def __init__(self, folder_name, mode = 'train', use_all = False):
         
         self.folder_name = folder_name
         self.mode = mode
-        self.rectum_file = rectum_file 
         #self.rectum_df = pd.read_csv(rectum_file)
         #self.all_file_names = self._get_patient_list(os.path.join(self.folder_name, 'lesion'))
 
@@ -1021,7 +1018,6 @@ def validate_pertimestep(val_dataloader, model, use_cuda = True, save_path = 'mo
 
     return mean_loss, mean_acc
 
-
 def dice_loss(pred_mask, gt_mask):
     '''
     y_pred, y_true -> [N, C=1, D, H, W]
@@ -1424,6 +1420,18 @@ def dice_loss(pred_mask, gt_mask):
     dice_loss = torch.mean(1. - (numerator / denominator))
     
     return dice_loss
+
+### Biopsy metrics
+
+def compute_hit_rate(obs, action):
+    """
+    Using observations, compute the hit rate 
+    """
+
+    # hit if : grid position intersects with lesion 
+    
+    # 1. given observation and action -> what is new state? 
+    # compute np.where(lesion) * np.where(grid_pos)
 
 if __name__ == '__main__':
 
