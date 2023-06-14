@@ -2672,7 +2672,7 @@ if __name__ =='__main__':
     print(f'Clipped actions : {clip_actions}')
     
     # SETTING UP RL ENVIRONMENT to use RL architecture 
-    PS_dataset = Image_dataloader(PS_PATH, use_all = True, mode  = TRAIN_MODE)
+    PS_dataset = Image_dataloader(PS_PATH, CSV_PATH, use_all = True, mode  = TRAIN_MODE)
     Data_sampler= DataSampler(PS_dataset)
     Biopsy_env_init = TemplateGuidedBiopsy_penalty(Data_sampler, train_mode = TRAIN_MODE)
     Biopsy_env = frame_stack_v1(Biopsy_env_init, 3)
