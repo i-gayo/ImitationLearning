@@ -1,0 +1,11 @@
+name: il_env
+dependencies:
+  - numpy
+  - pandas
+  - h5py
+  - matplotlib
+  - pip 
+  - pytorch
+  - tensorboard
+  - simpleitk
+
