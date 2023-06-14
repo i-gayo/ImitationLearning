@@ -90,7 +90,7 @@ parser.add_argument('--feature_extractor',
                     metavar='feature_extractor',
                     type=str,
                     action='store',
-                    default='efficient',
+                    default='imitationconv',
                     help='Which feature extractor to use')
 
 def round_to_05(val):
@@ -2651,7 +2651,7 @@ if __name__ =='__main__':
     LABELS_PATH_L2L = '/Users/ianijirahmae/ImitationLearning/NEW_ACTION_OBS_LABELS.h5'
     
     # LABEL PATH IF JUST DOING E2E TRAINING ONLY 
-    LABELS_PATH_ALL = '/Users/ianijirahmae/Documents/PhD_project/Biopsy_RL/action_labels.h5'
+    #LABELS_PATH_ALL = '/Users/ianijirahmae/Documents/PhD_project/Biopsy_RL/action_labels.h5'
 
     # Parse arguments 
     args = parser.parse_args()

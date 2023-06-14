@@ -983,10 +983,8 @@ if __name__ == '__main__':
     ps_path = '/Users/ianijirahmae/Documents/DATASETS/Data_by_modality'
     csv_path = '/Users/ianijirahmae/Documents/PhD_project/MRes_project/Reinforcement Learning/patient_data_multiple_lesions.csv'
     
-     # H5PY Dataset for saving labels : change file name to what is convenient for you
-    labels_path = 'ACTION_OBS_LABEL.h5'
-   
-    
+    # H5PY Dataset for saving labels : change file name to what is convenient for you
+    labels_path = 'ACTION_OBS_LABEL_L2L.h5'
     hf = h5py.File(labels_path, 'w')     
 
     # Define dataloader and lesion labellers : use to load patietn volumes in 
@@ -1157,4 +1155,3 @@ if __name__ == '__main__':
 
     print('Chicken')
 
-print('chicken')

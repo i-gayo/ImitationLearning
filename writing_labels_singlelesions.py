@@ -974,8 +974,7 @@ if __name__ == '__main__':
     # Code extracts the best positions to place needles into (ie best grid positions)
     ps_path = '/Users/ianijirahmae/Documents/DATASETS/Data_by_modality'
     csv_path = '/Users/ianijirahmae/Documents/PhD_project/MRes_project/Reinforcement Learning/patient_data_multiple_lesions.csv'
-    
-    labels_path = 'ACTION_OBS_LABELS_SINGLE.h5'
+    labels_path = 'ACTION_OBS_LABELS_C2L.h5'
     # H5PY Dataset for saving labels : change file name to what is convenient for you
     hf = h5py.File(labels_path, 'w')     
 
