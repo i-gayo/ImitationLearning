@@ -12,45 +12,38 @@ import h5py
 #from utils import *
 import torch 
 
-import numpy as np
-from scipy.interpolate import griddata
+def separate_actions(comb_actions, all_ids, idx):
+    """
+    A function that obtains actions only corresponding to lesion with idx 
 
-def interpolate_grid():
-    # Create a 13x13 grid with some sample data
-    x = np.linspace(-6, 6, 13)
-    y = np.linspace(-6, 6, 13)
-    X, Y = np.meshgrid(x, y)
-    Z = np.zeros([13,13])
-    Z[6,6] = 1 # set centre as 0 
+    :comb_actions: 3xN action array 
+    :all_ids: 3x1 action identifiers; ids for which lesion each action corresponds to 
 
-    # Create a 100x100 grid with coordinates that span the range of the 13x13 grid
-    xi = np.linspace(-50, 50, 100)
-    yi = np.linspace(-50, 50, 100)
-    XI, YI = np.meshgrid(xi, yi)
+    Returns:
+    :sep_actions: 3 x num_steps where num_steps is the number of steps corresponding to chosen idx lesion 
+    """
 
-    # Interpolate the 13x13 grid to the 100x100 grid using linear interpolation
-    ZI = griddata((X.flatten(), Y.flatten()), Z.flatten(), (XI, YI), method='linear', fill_value = 0)
+    # obtain idx of actions corresponding to lesion 
+    idx_map = (all_ids == idx)[0]
 
-    # Plot the interpolated grid
-    import matplotlib.pyplot as plt
-    plt.imshow(ZI) #, origin='lower', extent=[0,1,0,1])
-    plt.colorbar()
-    plt.show()
+    # return actions corresponding to lesion idx only 
+    sep_actions = comb_actions[:,idx_map]
 
-def interpolate_tensor(input_tensor):
-    # Reshape the input tensor to have a batch size of 1
-    input_tensor = input_tensor.unsqueeze(0)
-    
-    # Define the desired output size
-    output_size = (100, 100, 24)
-    
-    # Use PyTorch's interpolate function to upsample the input tensor
-    output_tensor = torch.nn.functional.interpolate(input_tensor, size=output_size, mode='trilinear')
-    
-    # Remove the batch dimension from the output tensor
-    output_tensor = output_tensor.squeeze(0)
-    
-    return output_tensor
+    return sep_actions 
+
+def separate_masks(multiple_lesions):
+
+    # for each lesion: 
+    unique_idx = np.unique(multiple_lesions)
+
+    num_lesion_masks = len(unique_idx) - 1
+
+    all_masks = [] 
+    for idx in range(num_lesion_masks):
+        mask = multiple_lesions == idx+1 # add 1 as we don't want background 
+        all_masks.append(mask)
+
+    return all_masks 
 
 class ActionFinder():
 
@@ -133,7 +126,7 @@ class ActionFinder():
 
         """
         
-        
+        print(f'starting point : {starting_point}')
         needle_means = [] # needle means of remaining lesions to be visited
         idx_map = {} # maps remaining lesion index to actual needle index
         
@@ -159,7 +152,6 @@ class ActionFinder():
         _, num_steps = np.shape(refined_actions)
         idx_identifier = np.ones((1,num_steps))*closest_idx
         #stacked_actions = np.vstack(refined_actions, lesion_idx)
-
 
         # Save visited idx, remove from map 
         self.remaining_idx.remove(closest_idx)
@@ -983,10 +975,8 @@ if __name__ == '__main__':
     ps_path = '/Users/ianijirahmae/Documents/DATASETS/Data_by_modality'
     csv_path = '/Users/ianijirahmae/Documents/PhD_project/MRes_project/Reinforcement Learning/patient_data_multiple_lesions.csv'
     
-     # H5PY Dataset for saving labels : change file name to what is convenient for you
-    labels_path = 'ACTION_OBS_LABEL.h5'
-   
-    
+    labels_path = 'ACTION_OBS_LABELS_SINGLE.h5'
+    # H5PY Dataset for saving labels : change file name to what is convenient for you
     hf = h5py.File(labels_path, 'w')     
 
     # Define dataloader and lesion labellers : use to load patietn volumes in 
@@ -1031,6 +1021,11 @@ if __name__ == '__main__':
             grid_labels, fired_grid, fired_grid_depth, small_fired_grid, small_fired_grid_depth, simple_grid, fired_depths = grid_labeller.get_labels(prostate_mask, tumour_centroids, grid_points, num_needles = 4) 
             combined_grid = np.sum(simple_grid, axis = 2)
 
+            #test_all_mask = separate_masks(multiple_label_img)
+                    
+            
+            #print('chicekn')
+            
             # To find coords for each lesion 
             # coord system : -6,6 left to right and -6,6 bottom to top of grid 
             x_coords, y_coords = np.meshgrid(np.arange(-6,7,1), np.arange(-6, 7, 1))
@@ -1052,23 +1047,36 @@ if __name__ == '__main__':
             print(f'Needle means \n {needle_means}')
 
             ### 3. OBTAIN ACTIONS PER TIME STEP USING ACTIONFINDER CLASS ###
-            starting_point = np.array([0,0]) #initialise starting point as centre of grid 
-            
+  
             all_actions = []
             all_identifiers = [] 
             all_needle_vol = [] 
 
+            starting_point = np.array([0,0]) #initialise starting point as centre of grid 
             action_mapper = ActionFinder(needle_means, needle_coords, needle_depths, starting_point)
 
+            
+            # Note for single lesion cases : always start from centre; for complete trajectoreis, change _ to starting_point to save last position as new startign position. 
+            #starting_point = np.array([0,0]) #initialise starting point as centre of grid 
+            
             # Find actions for each lesion 
             for idx_l in range(num_lesions):
-                rel_actions, starting_point, idx_identifier = action_mapper.find_actions(starting_point)
+                rel_actions, _, idx_identifier = action_mapper.find_actions(starting_point)
+
+                # change starting_point to (0,0) every time 
+
                 print(rel_actions)
                 all_actions.append(rel_actions)
                 all_identifiers.append(idx_identifier)
+
+            print('chicken')
             all_actions = np.concatenate(all_actions, axis =1)
             all_identifiers = np.concatenate(all_identifiers, axis = 1)
             visited_idx = action_mapper.return_visit_order() 
+
+            # obtain action
+            #test_actions = separate_actions(all_actions1, all_identifiers1, 2)
+
 
             ### 4. OBTAIN STATES/OBSERVATIONS PER TIME STEP USING GRIDARRAY CLASS ###
             # Obtain updated grid position at each time step : 100 x 100 grid. 
@@ -1083,6 +1091,8 @@ if __name__ == '__main__':
 
             for idx in range(NUM_ACTIONS):
                 
+                idx_identifier = all_identifiers[0][idx]
+
                 # iterate through each time step and obtain actions at each time step 
                 action_set = all_actions[:,idx]
                 all_current_pos.append(copy.deepcopy(current_pos))
@@ -1107,10 +1117,18 @@ if __name__ == '__main__':
                     needle_vol = grid_creater.create_needle_vol(current_pos, max_depth)
 
                 # Update new position 
-                current_pos[2] = action_set[2] # z position : 0 if not-fired, 1 if fired 
-                current_pos[0:2] += action_set[0:2] # new_pos = current_pos + (delta_x, delta_y)
-                all_needle_vol.append(needle_vol)
-                print(f'Current pos: {current_pos}')
+                change_lesions = (idx_identifier != all_identifiers[0][idx-1]) and (idx != 0)
+                if change_lesions: # start from the middle 
+                    print('changed lesions')
+                    current_pos[2] = 0 + action_set[2]
+                    current_pos[0:2] = np.array([0,0]) + action_set[0:2]
+
+                    print(f'Current pos: {current_pos}')
+                else: #if the same as previous point, keep adding starting point, else: 
+                    current_pos[2] = action_set[2] # z position : 0 if not-fired, 1 if fired 
+                    current_pos[0:2] += action_set[0:2] # new_pos = current_pos + (delta_x, delta_y)
+                    all_needle_vol.append(needle_vol)
+                    print(f'Current pos: {current_pos}')
             
             # Stack all actions and observations 
             all_grids_array = np.stack(all_grids)
@@ -1155,6 +1173,5 @@ if __name__ == '__main__':
     # Close hf  
     hf.close() 
 
-    print('Chicken')
 
 print('chicken')
