@@ -24,7 +24,7 @@ print('Image size: %d-%d-%d.' % image.shape[:3])
 
 
 idd = int(image.shape[2]/2)
-slice = image.get_fdata()[:,:,idd] * (gland.get_fdata()[:,:,idd]*0.5+0.5)
+slice = image.get_fdata()[:,:,idd] * (gland.get_fdata()[:,:,idd]*0.5+0.5) * (1-targets.get_fdata()[:,:,idd])
 
 plt.figure()
 plt.imshow(slice, cmap='gray')
