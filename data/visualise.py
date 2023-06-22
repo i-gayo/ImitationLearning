@@ -1,7 +1,7 @@
 
 import os
 
-import nibabel as nib
+import SimpleITK as sitk
 import matplotlib.pyplot as plt
 
 
@@ -14,17 +14,16 @@ IDX = 10
 
 filenames = os.listdir(LOCAL_PATH_IMAGE)
 
-image = nib.load(os.path.join(LOCAL_PATH_IMAGE,filenames[IDX]))
-gland = nib.load(os.path.join(LOCAL_PATH_GLAND,filenames[IDX]))
-targets = nib.load(os.path.join(LOCAL_PATH_TARGETS,filenames[IDX]))
+image = sitk.ReadImage(os.path.join(LOCAL_PATH_IMAGE,filenames[IDX]))
+gland = sitk.ReadImage(os.path.join(LOCAL_PATH_GLAND,filenames[IDX]))
+targets = sitk.ReadImage(os.path.join(LOCAL_PATH_TARGETS,filenames[IDX]))
 
-pixdim = image.header['pixdim']
-print('Pixel dimension: %s.' % pixdim[1:4])
-print('Image size: %d-%d-%d.' % image.shape[:3])
+print('Pixel dimension: %s-%s-%s.' % image.GetSpacing())
+print('Image size: %d-%d-%d.' % image.GetSize())
 
 
-idd = int(image.shape[2]/2)
-slice = image.get_fdata()[:,:,idd] * (gland.get_fdata()[:,:,idd]*0.5+0.5) * (1-targets.get_fdata()[:,:,idd])
+idd = int(image.GetSize()[2]/2)
+slice = sitk.GetArrayFromImage(image)[idd,...] * (sitk.GetArrayFromImage(gland)[idd,...]*0.5+0.5) * (1-sitk.GetArrayFromImage(targets)[idd,...])
 
 plt.figure()
 plt.imshow(slice, cmap='gray')
