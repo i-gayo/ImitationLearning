@@ -1,13 +1,16 @@
 
 import os
+import configparser
 
 import SimpleITK as sitk
 import matplotlib.pyplot as plt
 
 
-LOCAL_PATH_IMAGE = 'data_tmp/DATASETS/t2w'
-LOCAL_PATH_GLAND = 'data_tmp/DATASETS/prostate_mask'
-LOCAL_PATH_TARGETS = 'data_tmp/DATASETS/lesion'
+cfg = configparser.ConfigParser()
+cfg.read('config.ini')
+LOCAL_PATH_IMAGE = cfg['Data']['LOCAL_PATH_IMAGE']
+LOCAL_PATH_GLAND = cfg['Data']['LOCAL_PATH_GLAND']
+LOCAL_PATH_TARGETS = cfg['Data']['LOCAL_PATH_TARGETS']
 
 
 FLAG_PLOT_SLICES = False 
