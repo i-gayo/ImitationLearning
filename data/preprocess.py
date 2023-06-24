@@ -18,17 +18,17 @@ H5FILE = cfg['Preprocess']['FILE_PREFIX'] + '.h5'
 
 
 def main():
-    '''
-    voxdims are voxel dimensions/spacing in axes order
-    gland_0000 are gland(case index), in unit8 3d arrays
-    targets_0000 are targets_(case index), in unit8 3d arrays
-    dt_0000 are dt_(case index) for gland, float32 distance transform, inside(<0) and outside(>0)
-    dt_0000_00 are dt_(case index)_(target_index) for targets, float32 distance transform, inside(<0) and outside(>0)
-    filenames store indexed case file names
+    ''' datasets description:
+    voxdims_000:    voxel dimensions/spacing_(case_index) in axes order
+    gland_0000:     gland_(case index), in unit8 3d arrays
+    targets_0000:   targets_(case index), in unit8 3d arrays
+    dt_0000:        dt_(case index) for gland, float32 distance transform, inside(<0) and outside(>0)
+    dt_0000_00:     dt_(case index)_(target_index) for targets, float32 distance transform, inside(<0) and outside(>0)
+    filenames_all:  stores indexed case file names
     all written in a single h5 file, separating targets and gland (and binary and dt) for memory when reading
     '''
     fh5 = h5py.File(H5FILE, 'w')
-    write_h5_data = lambda fn, d: fh5.create_dataset(fn,d.shape,dtype=d.dtype,data=d)
+    write_h5_array = lambda fn, d: fh5.create_dataset(fn,d.shape,dtype=d.dtype,data=d)
     filenames_all = []
     for idx, filename in enumerate([os.path.join(LOCAL_PATH_TARGETS,f) for f in os.listdir(LOCAL_PATH_GLAND)]):  
 
@@ -36,10 +36,14 @@ def main():
             print('WARNING: %s cannot be found or open.' % filename)
             continue
         #TODO: check the image exists
+        case_idx = len(filenames_all)
+        filenames_all += [filename.split('/')[-1]]
 
         targets = sitk.ReadImage(filename, outputPixelType=sitk.sitkUInt8)
         voxdims = targets.GetSpacing()[::-1]
-        two_way_dt = lambda x: distance_transform(1-x,sampling=voxdims)-distance_transform(x,sampling=voxdims)
+        fh5.create_dataset('/voxdims_%04d' % case_idx,len(voxdims),data=voxdims)
+
+        two_way_dt = lambda x: (distance_transform(1-x,sampling=voxdims)-distance_transform(x,sampling=voxdims)).astype('float32')
         targets_array = sitk.GetArrayFromImage(
             sitk.RelabelComponent(
             sitk.Cast(sitk.ConnectedComponent(targets),sitk.sitkUInt8), 
@@ -67,18 +71,17 @@ def main():
         for idx, v in enumerate(volumes):
             dt_target = two_way_dt(targets_array==(idx+1))
             #sitk.WriteImage(sitk.GetImageFromArray((d[40,...]/d.max()*255).astype('uint8')),'test_d.jpg')
-            write_h5_data('/dt_%04d_%02d' % (case_idx,idx+1), dt_target)
+            write_h5_array('/dt_%04d_%02d' % (case_idx,idx+1), dt_target)
 
-        write_h5_data('/gland_%04d' % case_idx, gland_array)
-        write_h5_data('/targets_%04d' % case_idx, targets_array)
-        write_h5_data('/dt_%04d' % case_idx, dt_gland)
+        write_h5_array('/gland_%04d' % case_idx, gland_array)
+        write_h5_array('/targets_%04d' % case_idx, targets_array)
+        write_h5_array('/dt_%04d' % case_idx, dt_gland)
 
-        filenames_all += filename.split('/')[-1]
-        case_idx = len(filenames_all)
-
-
-
-    print("Preprocessing done")
+    # after for loop
+    fh5.create_dataset('filenames_all',len(filenames_all),data=filenames_all)
+    fh5.flush()
+    fh5.close()
+    print("%d data preprocessed and saved at %s." % (case_idx+1,H5FILE))
 
 
 if __name__ == "__main__":
