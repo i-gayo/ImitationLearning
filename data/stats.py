@@ -29,8 +29,8 @@ for idx,filename in enumerate([os.path.join(LOCAL_PATH_TARGETS,f) for f in os.li
         continue
 
     targets = sitk.ReadImage(filename,outputPixelType=sitk.sitkUInt8)
-    targets_components = sitk.Cast(sitk.ConnectedComponent(targets),sitk.sitkUInt8)
-    target_components_array = sitk.GetArrayFromImage(targets_components)
+    target_components = sitk.Cast(sitk.ConnectedComponent(targets),sitk.sitkUInt8)
+    target_components_array = sitk.GetArrayFromImage(target_components)
     num = target_components_array.max()
 
     if FLAG_PLOT_SLICES:
