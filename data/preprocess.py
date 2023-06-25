@@ -95,7 +95,7 @@ def main():
     fh5_bin_t.close()
     fh5_dt_g.close()
     fh5_dt_t.close()
-    print("%d data preprocessed and saved at: \n%s \n%s \n%s \n%s." % (
+    print("%d data preprocessed and saved: \n%s \n%s \n%s \n%s." % (
         case_idx+1, 
         H5FILE_BIN_GLAND, H5FILE_BIN_TARGETS, 
         H5FILE_DT_GLAND, H5FILE_DT_TARGETS))
