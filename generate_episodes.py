@@ -1,10 +1,12 @@
 
+
 import os
+import sys
 import configparser
 
 import h5py
 
-from transperineal_biopsy import NeedleGuideTemplate, Episode
+from environment.transperineal_biopsy import NeedleGuideTemplate, Episode
 
 
 cfg = configparser.ConfigParser()
