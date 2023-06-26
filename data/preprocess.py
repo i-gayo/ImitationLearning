@@ -13,11 +13,13 @@ LOCAL_PATH_IMAGE = cfg['Data']['LOCAL_PATH_IMAGE']
 LOCAL_PATH_GLAND = cfg['Data']['LOCAL_PATH_GLAND']
 LOCAL_PATH_TARGETS = cfg['Data']['LOCAL_PATH_TARGETS']
 TARGET_VOLUME_LOW = eval(cfg['Preprocess']['TARGET_VOLUME_LOW'])
+FLAG_DT = eval(cfg['Preprocess']['PRECOMPUTE_DT'])
 
-H5FILE_BIN_GLAND = cfg['Preprocess']['FILE_PREFIX'] + 'bin_g.h5'
-H5FILE_BIN_TARGETS = cfg['Preprocess']['FILE_PREFIX'] + 'bin_t.h5'
-H5FILE_DT_GLAND = cfg['Preprocess']['FILE_PREFIX'] + 'dt_g.h5'
-H5FILE_DT_TARGETS = cfg['Preprocess']['FILE_PREFIX'] + 'dt_t.h5'
+H5FILE_BIN = cfg['Preprocess']['FILE_PREFIX'] + 'bin.h5'
+if FLAG_DT:
+    H5FILE_DT_GLAND = cfg['Preprocess']['FILE_PREFIX'] + 'dt_g.h5'
+    H5FILE_DT_TARGETS = cfg['Preprocess']['FILE_PREFIX'] + 'dt_t.h5'
+
 
 
 def main():
@@ -32,27 +34,27 @@ def main():
     all written in a single h5 file, separating targets and gland (and binary and dt) for memory when reading
     '''
 
-    fh5_bin_g = h5py.File(H5FILE_BIN_GLAND, 'w')
-    fh5_bin_t = h5py.File(H5FILE_BIN_TARGETS, 'w')
-    fh5_dt_g = h5py.File(H5FILE_DT_GLAND, 'w')
-    fh5_dt_t = h5py.File(H5FILE_DT_TARGETS, 'w')
+    fh5_bin = h5py.File(H5FILE_BIN, 'w')
+    if FLAG_DT:
+        fh5_dt_g = h5py.File(H5FILE_DT_GLAND, 'w')
+        fh5_dt_t = h5py.File(H5FILE_DT_TARGETS, 'w')
     write_h5_array = lambda fn, dn, d: fn.create_dataset(dn, d.shape,dtype=d.dtype, data=d)
 
     filenames_all = []
+    voxdims_all = []
     for idx, filename in enumerate([os.path.join(LOCAL_PATH_TARGETS,f) for f in os.listdir(LOCAL_PATH_GLAND)]):  
-        #DEBUG: if idx>10: break
+        #DEBUG: if idx>20: break
 
         if not os.path.isfile(filename):
             print('WARNING: %s cannot be found or open.' % filename)
             continue
         #TODO: check the image exists
         case_idx = len(filenames_all)
-        filenames_all += [filename.split('/')[-1]]
 
         ## read targets
         targets = sitk.ReadImage(filename, outputPixelType=sitk.sitkUInt8)
         voxdims = targets.GetSpacing()[::-1]
-        fh5_bin_g.create_dataset('/voxdims_%04d' % case_idx,len(voxdims),data=voxdims)
+        # fh5_bin_g.create_dataset('/voxdims_%04d' % case_idx,len(voxdims),data=voxdims)
 
         two_way_dt = lambda x: (distance_transform(1-x,sampling=voxdims)-distance_transform(x,sampling=voxdims)).astype('float16')
         targets_array = sitk.GetArrayFromImage(
@@ -69,7 +71,7 @@ def main():
                 # update num and volumes after removal
                 num = targets_array.max()
                 volumes = [(targets_array==(id+1)).sum() for id in range(num)]
-        write_h5_array(fh5_bin_t, '/targets_%04d' % case_idx, targets_array)
+        write_h5_array(fh5_bin, '/targets_%04d' % case_idx, targets_array)
 
         ## read gland
         gland = sitk.ReadImage(
@@ -77,28 +79,31 @@ def main():
             outputPixelType=sitk.sitkUInt8 )
         #TODO: check meta data consistency
         gland_array = sitk.GetArrayFromImage(gland)
-        write_h5_array(fh5_bin_g, '/gland_%04d' % case_idx, gland_array)
+        write_h5_array(fh5_bin, '/gland_%04d' % case_idx, gland_array)
 
-        ## compute DT        
-        dt_gland = two_way_dt(gland_array)
-        write_h5_array(fh5_dt_g, '/dt_%04d' % case_idx, dt_gland)
-        #sitk.WriteImage(sitk.GetImageFromArray((abs(dt_gland[40,...])/abs(dt_gland).max()*255).astype('uint8')),'test_d.jpg')
-
-        for idx, v in enumerate(volumes):
-            dt_target = two_way_dt(targets_array==(idx+1))
-            write_h5_array(fh5_dt_t, '/dt_%04d_%02d' % (case_idx,idx+1), dt_target)
+        ## compute DT
+        if FLAG_DT: 
+            dt_gland = two_way_dt(gland_array)
+            write_h5_array(fh5_dt_g, '/dt_%04d' % case_idx, dt_gland)
+            #sitk.WriteImage(sitk.GetImageFromArray((abs(dt_gland[40,...])/abs(dt_gland).max()*255).astype('uint8')),'test_d.jpg')
+            for idx, v in enumerate(volumes):
+                dt_target = two_way_dt(targets_array==(idx+1))
+                write_h5_array(fh5_dt_t, '/dt_%04d_%02d' % (case_idx,idx+1), dt_target)
+        
+        ## update at loop end
+        filenames_all += [filename.split('/')[-1]]
+        voxdims_all += voxdims
 
 
     # after for loop
-    fh5_bin_g.create_dataset('filenames_all',len(filenames_all),data=filenames_all)
-    fh5_bin_g.close()
-    fh5_bin_t.close()
-    fh5_dt_g.close()
-    fh5_dt_t.close()
-    print("%d data preprocessed and saved: \n%s \n%s \n%s \n%s." % (
-        case_idx+1, 
-        H5FILE_BIN_GLAND, H5FILE_BIN_TARGETS, 
-        H5FILE_DT_GLAND, H5FILE_DT_TARGETS))
+    fh5_bin.create_dataset('voxdims_all',[len(voxdims_all)/3,3],data=voxdims_all)
+    fh5_bin.create_dataset('filenames_all',len(filenames_all),data=filenames_all)
+    fh5_bin.close()
+    print("%d data preprocessed and saved: \n%s" % (case_idx+1, H5FILE_BIN))
+    if FLAG_DT:
+        print("\n%s \n%s" % (H5FILE_DT_GLAND, H5FILE_DT_TARGETS))
+        fh5_dt_g.close()
+        fh5_dt_t.close()
 
 
 if __name__ == "__main__":
