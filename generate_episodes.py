@@ -6,7 +6,7 @@ import configparser
 
 import h5py
 
-from environment.transperineal_biopsy import NeedleGuideTemplate, Episode
+from environment.biopsy_env import TPBEnv
 
 
 cfg = configparser.ConfigParser()
@@ -26,19 +26,11 @@ def main():
         gland = fh5_bin['/gland_%04d' % idx][()]
         targets = fh5_bin['/targets_%04d' % idx][()]
 
-        needle_template = NeedleGuideTemplate(gland)
-        episode = Episode(needle_template, targets)
+        tpb_env = TPBEnv() # create an biopsy environment, with default guide and transition
 
-        
+        episodes = tpb_env.generate_episodes()
 
-
-
-
-    ## place the template
-
-    ## emulate episodes
-
-    ## save episodes to files
+        # save episodes to files
 
 
 
