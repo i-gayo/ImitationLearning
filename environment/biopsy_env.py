@@ -40,6 +40,18 @@ class LabelledImageWorld():
         self.target = target
         self.voxdims = voxdims
 
+        # - The normalised image coordinate system, per torch convention [-1, 1]
+        # - The physical image coordinate system, in mm centred at the image centre
+        #           such that coordinates_mm = coordinates_normliased * voxdims_unit (mm/unit)
+        # align_corners=True, i.e. -1 and 1 are the centre points of the corner pixels (vs. corner/edge points)
+        self.image_length_mm = self.gland.shape[2:5][None] * self.voxdims
+        self.voxdims_unit = self.voxdims * 2 / self.image_length_mm
+        self.image_centre_mm = self.image_length_mm * 0.5
+
+        # reference_grid_*: (N, D, H, W, 3)
+        self.reference_grid_normalised = torch.meshgrid()  
+        self.reference_grid_mm = torch.meshgrid()  # align_corners=True
+
     def get_gland(self):
         return self.gland
     def get_target(self):
@@ -58,12 +70,16 @@ class NeedleGuideSampling():
         Initialise the needle guide position, 
         aligning the gland bounding box and template centres
         '''
-        self.guide_locations = [world.gland]
+        self.guide_locations = self.centre_aligned_locations(world.gland, world.voxdims)
         self.sampling_loc_idx = []
         self.samples = []
     
     def update(self, world):
         self.sample = unfun_interpolate(world.target, self.guide_locations[self.sampling_loc_idx])
+    
+    @staticmethod
+    def centre_aligned_locations(gland, voxdims):
+
 
 
 ## transition classes
