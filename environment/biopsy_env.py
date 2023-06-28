@@ -34,23 +34,29 @@ class TPBEnv():
 ## world classes
 class LabelledImageWorld():
     #TODO: Base class for other world data
-    def __init__(self, gland: torch.Tensor, target: torch.Tensor, voxdims: torch.Tensor):        
+    def __init__(self, gland: torch.Tensor, target: torch.Tensor, voxdims: list):        
         #TODO: config options to include other examples 
         self.gland = gland 
         self.target = target
         self.voxdims = voxdims
+        self.batch_size = self.gland.shape[0]
+        self.vol_size = list(self.gland.shape[2:5])
 
         # - The normalised image coordinate system, per torch convention [-1, 1]
         # - The physical image coordinate system, in mm centred at the image centre
-        #           such that coordinates_mm = coordinates_normliased * voxdims_unit (mm/unit)
+        #           such that coordinates_mm = coordinates_normliased * unit_dims (mm/unit)
         # align_corners=True, i.e. -1 and 1 are the centre points of the corner pixels (vs. corner/edge points)
-        self.image_length_mm = self.gland.shape[2:5][None] * self.voxdims
-        self.voxdims_unit = self.voxdims * 2 / self.image_length_mm
-        self.image_centre_mm = self.image_length_mm * 0.5
+        self.image_length_mm = [[(s-1)*vd for s,vd in zip(self.vol_size,n)] for n in self.voxdims]
+        self.unit_dims = [[u/2 for u in n] for n in self.image_length_mm] 
 
         # reference_grid_*: (N, D, H, W, 3)
-        self.reference_grid_normalised = torch.meshgrid()  
-        self.reference_grid_mm = torch.meshgrid()  # align_corners=True
+        device = self.gland.device
+        self.reference_grid_mm = torch.stack([torch.stack(torch.meshgrid(
+            torch.linspace(-self.image_length_mm[n][0]/2,self.image_length_mm[n][0]/2, self.vol_size[0]),
+            torch.linspace(-self.image_length_mm[n][1]/2,self.image_length_mm[n][1]/2, self.vol_size[1]),
+            torch.linspace(-self.image_length_mm[n][2]/2,self.image_length_mm[n][2]/2, self.vol_size[2]),
+            indexing='ij'), dim=3) for n in range(self.batch_size)], dim=0).to(device)
+        # align_corners=True
 
     def get_gland(self):
         return self.gland
@@ -70,6 +76,16 @@ class NeedleGuideSampling():
         Initialise the needle guide position, 
         aligning the gland bounding box and template centres
         '''
+        GLAND_CENTRE = "centroid"
+
+        gland_coordinates = world.reference_grid_mm[
+            world.gland.squeeze()[...,None].repeat_interleave(dim=4,repeats=3)
+            ].reshape((world.gland.shape[0],-1,3))
+        if GLAND_CENTRE is "centroid":
+            self.gland_centre = gland_coordinates.mean(dim=1)
+        elif GLAND_CENTRE is "bbox":
+            self.gland_centre = (gland_coordinates.max(dim=1)[0] + gland_coordinates.min(dim=1)[0]) / 2
+        
         self.guide_locations = self.centre_aligned_locations(world.gland, world.voxdims)
         self.sampling_loc_idx = []
         self.samples = []
@@ -79,6 +95,7 @@ class NeedleGuideSampling():
     
     @staticmethod
     def centre_aligned_locations(gland, voxdims):
+        return torch.mean(gland) + torch.linspace(13,-1,1)
 
 
 

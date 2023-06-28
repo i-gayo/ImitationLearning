@@ -22,10 +22,7 @@ def main():
     
     fh5_bin = h5py.File(H5FILE_BIN, 'r')
     # filenames_all = [b.decode("utf-8") for b in fh5_bin_g['filenames_all'][()]]
-    voxdims_all = torch.tensor(
-        fh5_bin['voxdims_all'][()],
-        dtype=torch.float32,
-        device=device)
+    voxdims_all = fh5_bin['voxdims_all'][()]
 
     for idx, voxdims in enumerate(voxdims_all):
 
@@ -42,7 +39,7 @@ def main():
         tpb_envs = TPBEnv(
             gland = gland[None,None].repeat(num_t,1,1,1,1), 
             target = torch.stack([targets==(i+1) for i in range(num_t)]).unsqueeze(1), 
-            voxdims = voxdims_all[idx,].repeat(num_t,1)) # create a predefined biopsy environment
+            voxdims = [voxdims_all[idx].tolist()]*num_t) # create a predefined biopsy environment
         
         for idx_target in range(targets.max()):
             target = targets==(idx_target+1) # single target
