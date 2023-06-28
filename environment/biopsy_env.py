@@ -76,20 +76,55 @@ class NeedleGuideSampling():
         Initialise the needle guide position, 
         aligning the gland bounding box and template centres
         '''
-        GLAND_CENTRE = "centroid"
+        GLAND_CENTRE = "centroid" # ("centroid", "bbox")
+        NEEDLE_LENGTH = 10  # in mm
+        NEEDLE_DEPTH = 3 # integer, [2, needle_length]
+        NUM_NEEDLE_SAMPLES = NEEDLE_LENGTH  # int(2*NEEDLE_LENGTH+1)
+        INITIAL_LOCATION = "random" # ("random", "centre")
 
+        ## pre-compute
         gland_coordinates = world.reference_grid_mm[
             world.gland.squeeze()[...,None].repeat_interleave(dim=4,repeats=3)
-            ].reshape((world.gland.shape[0],-1,3))
-        if GLAND_CENTRE is "centroid":
+                                                    ].reshape((world.batch_size,-1,3))
+        '''debug
+        from PIL import Image
+        im = Image.fromarray((world.gland.squeeze()[...,None].repeat_interleave(dim=4,repeats=3))[0,40,:,:,0].cpu().numpy())
+        im.save("test.jpeg")
+        '''
+        if GLAND_CENTRE == "centroid":
             self.gland_centre = gland_coordinates.mean(dim=1)
-        elif GLAND_CENTRE is "bbox":
+        elif GLAND_CENTRE == "bbox":
             self.gland_centre = (gland_coordinates.max(dim=1)[0] + gland_coordinates.min(dim=1)[0]) / 2
         
-        self.guide_locations = self.centre_aligned_locations(world.gland, world.voxdims)
-        self.sampling_loc_idx = []
-        self.samples = []
-    
+        ## align brachytherapy template (13x13 5mm apart) 
+        #  shape: [N,NEEDLE_DEPTH,13,13,3]
+        device = world.gland.device
+        # compute the starting needle locations (without length), use guide_sampling to obtain all sample locations (with length)
+        self.guide_start_mm = torch.stack([
+            torch.stack(
+                torch.meshgrid(
+                    torch.linspace(-NEEDLE_LENGTH,(2-1/NEEDLE_DEPTH)*NEEDLE_LENGTH,NEEDLE_DEPTH),
+                    torch.linspace(-12*5/2,12*5/2,13),
+                    torch.linspace(-12*5/2,12*5/2,13),
+                    indexing='ij'), dim=3
+                        ).to(device) + self.gland_centre[n].reshape(1,1,1,3) for n in range(world.batch_size)
+                                                ], dim=0)
+        #TODO: check the target covered by the guide locations
+
+        ## initialises the current sampling location - an index of [n, needle_depth, y, x]
+        nc = self.guide_start_mm.shape[1]*self.guide_start_mm.shape[2]*self.guide_start_mm.shape[3]
+        if INITIAL_LOCATION == 'random':
+            flat_idx = torch.randint(high=nc,size=[world.batch_size])
+        elif INITIAL_LOCATION == 'centre':
+            flat_idx = torch.tensor([int(nc/2)]*2)        
+        self.sample_location_index = torch.nn.functional.one_hot(flat_idx,nc).type(torch.bool).view(
+            world.batch_size, 
+            NEEDLE_DEPTH, 
+            self.guide_start_mm.shape[2], 
+            self.guide_start_mm.shape[3]
+            ).to(device)
+
+
     def update(self, world):
         self.sample = unfun_interpolate(world.target, self.guide_locations[self.sampling_loc_idx])
     
@@ -121,10 +156,13 @@ class UltrasoundSlicing():
     '''
     A class to acquire ultrasound slices 
     '''
-    def __init__(self):
+    def __init__(self, world):
         '''
         Configure the slices required for observation
         Precompute the 
         '''
+        ## initial observation location
+
+
     def update(self, world):
         ultrasound_slices = unfun_slicing(world.gland, world.target)
