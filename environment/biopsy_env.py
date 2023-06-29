@@ -14,20 +14,21 @@ class TPBEnv():
     :param target:  boolean 5D pytorch tensor [N, 1, D, H, W].
     :return: the base env
     '''
-    def __init__(self, **kwargs):        
+    def __init__(self, **kwargs):
         #TODO: config options to include other examples 
         self.world = LabelledImageWorld(**kwargs) #Example
         self.action = NeedleGuideSampling(self.world) #Example
-        self.transition = RandomDeformationTransition(self.world) #Example
+        self.transition = DeformationTransition(self.world) #Example
         self.observation = UltrasoundSlicing(self.world) #Example
 
     def generate_episodes(self, num):
+        episodes = []
         for step in range(num):
             self.action.update(self.world)
-            self.transition.next(self.world,self.action)
+            self.world = self.transition.next(self.world, self.action)
             self.observation.update(self.world)
             # assemble observations and actions
-            episodes = self.transition.next()
+            episodes[step] = self.transition.next()
         return episodes
 
 
@@ -60,6 +61,7 @@ class LabelledImageWorld():
 
     def get_gland(self):
         return self.gland
+    
     def get_target(self):
         return self.target
 
@@ -116,7 +118,7 @@ class NeedleGuideSampling():
         if INITIAL_LOCATION == 'random':
             flat_idx = torch.randint(high=nc,size=[world.batch_size])
         elif INITIAL_LOCATION == 'centre':
-            flat_idx = torch.tensor([int(nc/2)]*2)        
+            flat_idx = torch.tensor([int((nc-.5)/2)]*2)        
         self.sample_location_index = torch.nn.functional.one_hot(flat_idx,nc).type(torch.bool).view(
             world.batch_size, 
             NEEDLE_DEPTH, 
@@ -127,27 +129,31 @@ class NeedleGuideSampling():
 
     def update(self, world):
         self.sample = unfun_interpolate(world.target, self.guide_locations[self.sampling_loc_idx])
-    
-    @staticmethod
-    def centre_aligned_locations(gland, voxdims):
-        return torch.mean(gland) + torch.linspace(13,-1,1)
-
 
 
 ## transition classes
-class RandomDeformationTransition():
+class DeformationTransition():
     #TODO: base class for other transition classes
     '''
     A class for world data (here, gland and target) transition
     '''
-    def __init__(self):
+    def __init__(self, world):
         '''
         A transition function
         Random - no action affected the world transition
         '''
+        FFD_GRID_SIZE = 50
+        '''
+        self.ffd_ctrl_pts = torch.meshgrid(
+            torch.linspace(),
+            torch.linspace(),
+            torch.linspace(),
+        )
+        '''
 
     def __next__(self, world, action):
         self.gland, self.target = unfun_deform(world.gland, world.target)
+        yield world
 
 
 ## observation classes
@@ -161,8 +167,23 @@ class UltrasoundSlicing():
         Configure the slices required for observation
         Precompute the 
         '''
-        ## initial observation location
-
+        
+        ## initial observation locations of 1 orthogonal axial and 1 sagittal slices
+        #TODO: support multiple non-orthogonal slices
+        # at the centre of the image volume, [(n,1,200,200,3),(n,96,200,1,3)]
+        device = world.gland.device
+        self.reference_slices_mm = [
+            torch.stack([torch.stack(torch.meshgrid(
+            torch.tensor([.0]),
+            torch.linspace(-world.image_length_mm[n][1]/2,world.image_length_mm[n][1]/2, world.vol_size[1]),
+            torch.linspace(-world.image_length_mm[n][2]/2,world.image_length_mm[n][2]/2, world.vol_size[2]),
+            indexing='ij'), dim=3) for n in range(world.batch_size)], dim=0).to(device),        
+            torch.stack([torch.stack(torch.meshgrid(
+            torch.linspace(-world.image_length_mm[n][0]/2,world.image_length_mm[n][0]/2, world.vol_size[0]),
+            torch.linspace(-world.image_length_mm[n][1]/2,world.image_length_mm[n][1]/2, world.vol_size[1]),
+            torch.tensor([.0]),
+            indexing='ij'), dim=3) for n in range(world.batch_size)], dim=0).to(device)
+        ]
 
     def update(self, world):
         ultrasound_slices = unfun_slicing(world.gland, world.target)
