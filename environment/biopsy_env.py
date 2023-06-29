@@ -38,8 +38,9 @@ class LabelledImageWorld():
     def __init__(self, gland: torch.Tensor, target: torch.Tensor, voxdims: list):       
 
         INITIAL_OBSERVE_LOCATION = "random" # ("random", "centre")
-        INITIAL_RANGE = 0.2
+        INITIAL_OBSERVE_RANGE = 0.2
      
+        device = gland.device
         #TODO: config options to include other examples 
         self.gland = gland 
         self.target = target
@@ -52,10 +53,10 @@ class LabelledImageWorld():
         #           such that coordinates_mm = coordinates_normliased * unit_dims (mm/unit)
         # align_corners=True, i.e. -1 and 1 are the centre points of the corner pixels (vs. corner/edge points)
         self.vol_size_mm = [[(s-1)*vd for s,vd in zip(self.vol_size,n)] for n in self.voxdims]
-        device = self.gland.device
         self.unit_dims = torch.tensor([[u/2 for u in n] for n in self.vol_size_mm]).to(device)
 
         # precompute reference_grid_*: (N, D, H, W, 3)
+        #N.B. ij indexing for logical indexing
         self.reference_grid_mm = torch.stack([torch.stack(torch.meshgrid(
             torch.linspace(-self.vol_size_mm[n][0]/2,self.vol_size_mm[n][0]/2, self.vol_size[0]),
             torch.linspace(-self.vol_size_mm[n][1]/2,self.vol_size_mm[n][1]/2, self.vol_size[1]),
@@ -65,7 +66,7 @@ class LabelledImageWorld():
 
         ## initialise the observation location
         if INITIAL_OBSERVE_LOCATION == 'random': # middle block of the image
-            self.observe_mm = (torch.rand(self.batch_size,3).to(device)-0.5)*INITIAL_RANGE * self.unit_dims
+            self.observe_mm = (torch.rand(self.batch_size,3).to(device)-0.5)*INITIAL_OBSERVE_RANGE * self.unit_dims
         elif INITIAL_OBSERVE_LOCATION == 'centre':
             self.observe_mm = torch.zeros(self.batch_size,3).to(device)
 
@@ -96,7 +97,7 @@ class NeedleGuideSampling():
 
         ## pre-compute
         gland_coordinates = world.reference_grid_mm[
-            world.gland.squeeze()[...,None].repeat_interleave(dim=4,repeats=3)
+            world.gland.squeeze(dim=1)[...,None].repeat_interleave(dim=4,repeats=3)
                                                     ].reshape((world.batch_size,-1,3))
         '''debug
         from PIL import Image
@@ -175,24 +176,24 @@ class UltrasoundSlicing():
     def __init__(self, world):
         '''
         Configure the slices required for observation
-        Precompute the 
         '''
         
         ## initial observation locations of 1 orthogonal axial and 1 sagittal slices
         #TODO: support multiple non-orthogonal slices
         # centre: at the centre of the image volume, [(n,1,200,200,3),(n,96,200,1,3)]
         device = world.gland.device
+        #N.B. xy indexing for grid_sampling
         self.reference_slices_mm = [
             torch.stack([torch.stack(torch.meshgrid(
-            torch.tensor([.0]),
-            torch.linspace(-world.vol_size_mm[n][1]/2,world.vol_size_mm[n][1]/2, world.vol_size[1]),
             torch.linspace(-world.vol_size_mm[n][2]/2,world.vol_size_mm[n][2]/2, world.vol_size[2]),
-            indexing='ij'), dim=3) for n in range(world.batch_size)], dim=0).to(device),        
-            torch.stack([torch.stack(torch.meshgrid(
-            torch.linspace(-world.vol_size_mm[n][0]/2,world.vol_size_mm[n][0]/2, world.vol_size[0]),
             torch.linspace(-world.vol_size_mm[n][1]/2,world.vol_size_mm[n][1]/2, world.vol_size[1]),
             torch.tensor([.0]),
-            indexing='ij'), dim=3) for n in range(world.batch_size)], dim=0).to(device)
+            indexing='xy'), dim=3) for n in range(world.batch_size)], dim=0).to(device),        
+            torch.stack([torch.stack(torch.meshgrid(
+            torch.tensor([.0]),
+            torch.linspace(-world.vol_size_mm[n][1]/2,world.vol_size_mm[n][1]/2, world.vol_size[1]),
+            torch.linspace(-world.vol_size_mm[n][0]/2,world.vol_size_mm[n][0]/2, world.vol_size[0]),
+            indexing='xy'), dim=3) for n in range(world.batch_size)], dim=0).to(device)
         ]
 
         self.update(world)  # get initial observation
@@ -205,10 +206,19 @@ class UltrasoundSlicing():
             for s in self.reference_slices_mm
             ]
         # interpolation
-        gland_slices = [self.reslice(world.gland.type(torch.float32), s) for s in slices_norm]
-        target_slices = [self.reslice(world.target.type(torch.float32), s) for s in slices_norm]
+        gland_slices = [self.reslice(world.gland.type(torch.float32), g) for g in slices_norm]
+        target_slices = [self.reslice(world.target.type(torch.float32), g) for g in slices_norm]
         # gather here all the observed 
         self.observation = [gland_slices, target_slices]
+        '''debug
+        import SimpleITK as sitk
+        threshold = 0.45
+        for b in range(world.batch_size):
+            sitk.WriteImage(sitk.GetImageFromArray((self.observation[0][0][b,...].squeeze().cpu().numpy()>=threshold).astype('uint8')*255), 'test_t%d_gland_axis.jpg'%b)
+            sitk.WriteImage(sitk.GetImageFromArray((self.observation[0][1][b,...].squeeze().cpu().numpy()>=threshold).astype('uint8')*255), 'test_t%d_gland_sag.jpg'%b)
+            sitk.WriteImage(sitk.GetImageFromArray((self.observation[1][0][b,...].squeeze().cpu().numpy()>=threshold).astype('uint8')*255), 'test_t%d_target_axis.jpg'%b)
+            sitk.WriteImage(sitk.GetImageFromArray((self.observation[1][1][b,...].squeeze().cpu().numpy()>=threshold).astype('uint8')*255), 'test_t%d_target_sag.jpg'%b)
+        '''
     
     @staticmethod
     def reslice(vol, coords):
@@ -219,4 +229,3 @@ class UltrasoundSlicing():
             padding_mode = 'zeros',
             align_corners = True
             )
-
