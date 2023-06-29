@@ -17,6 +17,8 @@ cfg = configparser.ConfigParser()
 cfg.read('data/config.ini')
 H5FILE_BIN = 'data/'+ cfg['Preprocess']['FILE_PREFIX'] + 'bin.h5'
 
+MAX_STEPS = 100
+
 
 def main():
     
@@ -43,7 +45,7 @@ def main():
         
         for idx_target in range(targets.max()):
             target = targets==(idx_target+1) # single target
-            episodes = tpb_envs.generate_episodes()
+            episodes = tpb_envs.run(num=MAX_STEPS)
 
         # save episodes to files
 
