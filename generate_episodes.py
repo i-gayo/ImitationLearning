@@ -28,7 +28,7 @@ def main():
 
     for idx, voxdims in enumerate(voxdims_all):
 
-        idx = 117
+        idx = 20
 
         gland = torch.tensor(
             fh5_bin['/gland_%04d' % idx][()], 

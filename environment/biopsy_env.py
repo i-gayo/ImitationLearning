@@ -17,7 +17,7 @@ class TPBEnv():
     def __init__(self, **kwargs):
         #TODO: config options to include other examples 
         self.world = LabelledImageWorld(**kwargs) #Example
-        self.action = NeedleGuideSampling(self.world) #Example
+        self.action = NeedleGuide(self.world) #Example
         self.transition = DeformationTransition(self.world) #Example
         self.observation = UltrasoundSlicing(self.world) #Example
 
@@ -25,7 +25,7 @@ class TPBEnv():
         episodes = []
         for step in range(num):
             self.action.update(self.observation)
-            self.transition.next(self.world, self.action)
+            self.transition.update(self.world, self.action)
             self.observation.update(self.world)
             # assemble observations and actions
             episodes[step] = self.transition.next()
@@ -78,7 +78,7 @@ class LabelledImageWorld():
 
 
 ## action sampling classes
-class NeedleGuideSampling():
+class NeedleGuide():
     #TODO: base class for other sampling methods
     '''
     A class to specify needle sampling methods using a needle guide 
@@ -94,6 +94,9 @@ class NeedleGuideSampling():
         NEEDLE_DEPTH = 3 # integer, [2, needle_length]
         NUM_NEEDLE_SAMPLES = NEEDLE_LENGTH  # int(2*NEEDLE_LENGTH+1)
         INITIAL_SAMPLE_LOCATION = "random" # ("random", "centre")
+
+        POLICY = 'lesion_centre'
+        STEPSIZE = 5
 
         ## pre-compute
         gland_coordinates = world.reference_grid_mm[
@@ -136,11 +139,43 @@ class NeedleGuideSampling():
             self.guide_start_mm.shape[2], 
             self.guide_start_mm.shape[3]
             ).to(device)
+        
+        self.sample_location = torch.zeros(13,13, device=device)
+        self.sample_depth = torch.zeros(4, device=device)
+        
+        ## initialise guidance
+        self.policy = POLICY
+        self.observe_stepsize = STEPSIZE  # in mm
+        self.flag_termination = False
+
+        self.observe_step_mm = torch.tensor(
+            [[STEPSIZE,0,0],
+             [-STEPSIZE,0,0],
+             [0,STEPSIZE,0],
+             [0,-STEPSIZE,0],
+             [0,0,STEPSIZE],
+             [0,0,-STEPSIZE],
+             [0,0,0]],
+             dtype=torch.float32,
+             device = device
+            )   # ijk
+        self.observe_step = torch.zeros(6, device=device)
 
 
     def update(self, observation):
-        #self.sample = unfun_interpolate(world.target, self.guide_locations[self.sampling_loc_idx])
-        return 0
+        ## calculate the action according to a policy
+        if self.policy == 'lesion_centre': 
+            '''
+            Implement "lesion_centre" policy:
+             - Update the closest <sample location/depth> to the (changing due to motion) lesion centre - 13x13 classification
+             - Move the <observation location> to the one closest to the lesion centre - 6 classification
+             - when arrives the closest <observation location>, set optimum depth [0,0,0,1] -> [one-hot,0] - 4 classification
+            '''
+            ## current lesion centre
+
+            observe_step = [] # (6) indicating where to move the observation location
+            sample_depth = []  # (4) [depth0, depth1, depth2, observe]
+            sample_location = [] # (13, 13) grid location
 
 
 ## transition classes
@@ -162,9 +197,14 @@ class DeformationTransition():
             torch.linspace(),
         )
         '''
+        
 
-    def __next__(self, world, action):
-        self.gland, self.target = unfun_deform(world.gland, world.target)
+    def update(self, world, action):
+        
+        ## update the world
+        #TODO: deform the volume
+
+
 
 
 ## observation classes
@@ -210,15 +250,17 @@ class UltrasoundSlicing():
         target_slices = [self.reslice(world.target.type(torch.float32), g) for g in slices_norm]
         # gather here all the observed 
         self.observation = [gland_slices, target_slices]
-        '''debug
+        #'''debug
         import SimpleITK as sitk
         threshold = 0.45
         for b in range(world.batch_size):
-            sitk.WriteImage(sitk.GetImageFromArray((self.observation[0][0][b,...].squeeze().cpu().numpy()>=threshold).astype('uint8')*255), 'test_t%d_gland_axis.jpg'%b)
-            sitk.WriteImage(sitk.GetImageFromArray((self.observation[0][1][b,...].squeeze().cpu().numpy()>=threshold).astype('uint8')*255), 'test_t%d_gland_sag.jpg'%b)
-            sitk.WriteImage(sitk.GetImageFromArray((self.observation[1][0][b,...].squeeze().cpu().numpy()>=threshold).astype('uint8')*255), 'test_t%d_target_axis.jpg'%b)
-            sitk.WriteImage(sitk.GetImageFromArray((self.observation[1][1][b,...].squeeze().cpu().numpy()>=threshold).astype('uint8')*255), 'test_t%d_target_sag.jpg'%b)
-        '''
+            sitk.WriteImage(sitk.GetImageFromArray((world.gland[b,...].squeeze().cpu().numpy()>=threshold).astype('uint8')*255), 'b%d_gland.nii'%b)
+            sitk.WriteImage(sitk.GetImageFromArray((world.target[b,...].squeeze().cpu().numpy()>=threshold).astype('uint8')*255), 'b%d_target.nii'%b)
+            sitk.WriteImage(sitk.GetImageFromArray((self.observation[0][0][b,...].squeeze().cpu().numpy()>=threshold).astype('uint8')*255), 'b%d_gland_axis.jpg'%b)
+            sitk.WriteImage(sitk.GetImageFromArray((self.observation[0][1][b,...].squeeze().cpu().numpy()>=threshold).astype('uint8')*255), 'b%d_gland_sag.jpg'%b)
+            sitk.WriteImage(sitk.GetImageFromArray((self.observation[1][0][b,...].squeeze().cpu().numpy()>=threshold).astype('uint8')*255), 'b%d_target_axis.jpg'%b)
+            sitk.WriteImage(sitk.GetImageFromArray((self.observation[1][1][b,...].squeeze().cpu().numpy()>=threshold).astype('uint8')*255), 'b%d_target_sag.jpg'%b)
+        #'''
     
     @staticmethod
     def reslice(vol, coords):
