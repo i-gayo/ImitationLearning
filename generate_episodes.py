@@ -28,7 +28,7 @@ def main():
 
     for idx, voxdims in enumerate(voxdims_all):
 
-        idx = 20
+        idx = 0
 
         gland = torch.tensor(
             fh5_bin['/gland_%04d' % idx][()], 
@@ -37,11 +37,12 @@ def main():
         targets = torch.tensor(
             fh5_bin['/targets_%04d' % idx][()], 
             dtype=torch.uint8, 
-            device=device)      
+            device=device)
         '''debug
         import SimpleITK as sitk
         sitk.WriteImage(sitk.GetImageFromArray((gland[48,:,:].cpu().numpy()*255).astype('uint8')), 'test_gland.jpg') 
         '''
+        # debug: gland, targets = gland[:,:,:-35], targets[:,:,:-35]
 
         num_t = targets.max()
         tpb_envs = TPBEnv(
