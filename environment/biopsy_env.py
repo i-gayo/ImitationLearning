@@ -24,7 +24,7 @@ class TPBEnv():
     def run(self, num):
         episodes = []
         for step in range(num):
-            self.action.update(self.observation)
+            self.action.update(self.world, self.observation)
             self.transition.update(self.world, self.action)
             self.observation.update(self.world)
             # assemble observations and actions
@@ -69,12 +69,21 @@ class LabelledImageWorld():
             self.observe_mm = (torch.rand(self.batch_size,3).to(device)-0.5)*INITIAL_OBSERVE_RANGE * self.unit_dims
         elif INITIAL_OBSERVE_LOCATION == 'centre':
             self.observe_mm = torch.zeros(self.batch_size,3).to(device)
-
-    def get_gland(self):
-        return self.gland
+  
+    def get_gland_coordinates(self):
+        return self.reference_grid_mm[
+            self.gland.squeeze(dim=1)[...,None].repeat_interleave(dim=4,repeats=3)
+            ].reshape((self.batch_size,-1,3))
+        '''debug
+        from PIL import Image
+        im = Image.fromarray((world.gland.squeeze()[...,None].repeat_interleave(dim=4,repeats=3))[0,40,:,:,0].cpu().numpy())
+        im.save("test.jpeg")
+        '''
     
-    def get_target(self):
-        return self.target
+    def get_target_coordinates(self):
+        return self.reference_grid_mm[
+            self.target.squeeze(dim=1)[...,None].repeat_interleave(dim=4,repeats=3)
+            ].reshape((self.batch_size,-1,3))
 
 
 ## action sampling classes
@@ -103,50 +112,58 @@ class NeedleGuide():
         self.policy = POLICY
         self.observe_stepsize = STEPSIZE  # in mm
         self.num_needle_samples = NUM_NEEDLE_SAMPLES
-
-        ## pre-compute
-        gland_coordinates = world.reference_grid_mm[
-            world.gland.squeeze(dim=1)[...,None].repeat_interleave(dim=4,repeats=3)
-                                                    ].reshape((world.batch_size,-1,3))
-        '''debug
-        from PIL import Image
-        im = Image.fromarray((world.gland.squeeze()[...,None].repeat_interleave(dim=4,repeats=3))[0,40,:,:,0].cpu().numpy())
-        im.save("test.jpeg")
-        '''
         
         ## align brachytherapy template (13x13 5mm apart) 
+        gland_coordinates = world.get_gland_coordinates()
         if GLAND_CENTRE == "centroid":
             self.gland_centre = gland_coordinates.mean(dim=1)
         elif GLAND_CENTRE == "bbox":
             self.gland_centre = (gland_coordinates.max(dim=1)[0] + gland_coordinates.min(dim=1)[0]) / 2
-        #  shape: [N,NUM_NEEDLE_DEPTHS,13,13,3]
-        device = world.gland.device
+
         # compute the needle centre locations (without length), use guide_sampling to obtain all sample locations (with length)
-        #N.B. return coordinates in i,j,k order
-        self.needle_centre_mm = torch.stack([
+        #N.B. xy indexing for grid sampler
+        device = world.gland.device
+        needle_centre_d = torch.linspace(
+            -NEEDLE_LENGTH/2,
+            NEEDLE_LENGTH/2,
+            NUM_NEEDLE_DEPTHS).tolist()
+        # a list of NUM_NEEDLE_DEPTHS (batch,13,13,NUM_NEEDLE_SAMPLES,3)
+        self.needle_samples_mm = [
+            torch.stack([
             torch.stack(
                 torch.meshgrid(
-                    torch.linspace(-(GRID_SIZE[0]-1)*GRID_SIZE[2]/2,(GRID_SIZE[0]-1)*GRID_SIZE[2]/2,GRID_SIZE[0]),
-                    torch.linspace(-(GRID_SIZE[1]-1)*GRID_SIZE[2]/2,(GRID_SIZE[1]-1)*GRID_SIZE[2]/2,GRID_SIZE[1]),
-                    torch.linspace(-NEEDLE_LENGTH/2,NEEDLE_LENGTH/2,NUM_NEEDLE_DEPTHS), # for starting position torch.linspace(-NEEDLE_LENGTH,(2-1/NUM_NEEDLE_DEPTHS)*NEEDLE_LENGTH,NUM_NEEDLE_DEPTHS),
-                    indexing='ij'), dim=3
-                        ).to(device) + self.gland_centre[n].reshape(1,1,1,3) for n in range(world.batch_size)
-                                                ], dim=0)
+                    torch.linspace(
+            -(GRID_SIZE[0]-1)*GRID_SIZE[2]/2,
+            (GRID_SIZE[0]-1)*GRID_SIZE[2]/2,
+            GRID_SIZE[0]),
+                    torch.linspace(
+            -(GRID_SIZE[1]-1)*GRID_SIZE[2]/2,
+            (GRID_SIZE[1]-1)*GRID_SIZE[2]/2,
+            GRID_SIZE[1]),
+                    torch.linspace(
+            centre_d - NEEDLE_LENGTH/2,
+            centre_d + NEEDLE_LENGTH/2,
+            NUM_NEEDLE_SAMPLES), 
+                    indexing='xy'), dim=3
+                        ).to(device) + self.gland_centre[n,(2,1,0)].reshape(1,1,1,3)  # convert to (x,y,z) from (k,j,i)
+                        for n in range(world.batch_size)], dim=0)  # for each data in a batch then stack in dim=0
+                                    for centre_d in needle_centre_d]  # for each needle depth
+
         #TODO: check the target covered by the guide locations
 
-        ## initialise the current sampling location - an index of [n, NUM_NEEDLE_DEPTHS, y, x]
+        ## initialise the sampling location 
+        ''' if use an index of [n, NUM_NEEDLE_DEPTHS, y, x]
         nc = NUM_NEEDLE_DEPTHS*GRID_SIZE[0]*GRID_SIZE[1]
         if INITIAL_SAMPLE_LOCATION == 'random':
             flat_idx = torch.randint(high=nc,size=[world.batch_size])
         elif INITIAL_SAMPLE_LOCATION == 'centre':
-            flat_idx = torch.tensor([int((nc-.5)/2)]*2)        
-        '''
+            flat_idx = torch.tensor([int((nc-.5)/2)]*2) 
         self.sample_location_index = torch.nn.functional.one_hot(flat_idx,nc).type(torch.bool).view(
             world.batch_size, NUM_NEEDLE_DEPTHS, GRID_SIZE[1], GRID_SIZE[0]).to(device)
         '''
+        self.sample_d = torch.ones(world.batch_size, NUM_NEEDLE_DEPTHS, device=device) / NUM_NEEDLE_DEPTHS
         self.sample_x = torch.ones(world.batch_size, GRID_SIZE[0], device=device) / GRID_SIZE[0]
         self.sample_y = torch.ones(world.batch_size, GRID_SIZE[1], device=device) / GRID_SIZE[1]
-        self.sample_d = torch.ones(world.batch_size, NUM_NEEDLE_DEPTHS, device=device) / NUM_NEEDLE_DEPTHS
         
         ## initialise guidance
         # observe: [positive, zero, negative]
@@ -156,7 +173,7 @@ class NeedleGuide():
         self.observe_z = torch.ones(world.batch_size, 3, device=device) / 3
 
 
-    def update(self, observation):
+    def update(self, world, observation):
         ## calculate the action according to a policy
         if self.policy == 'lesion_centre': 
             '''
@@ -166,10 +183,31 @@ class NeedleGuide():
              - when arrives the closest <observation location>, set optimum depth [0,0,0,1] -> [one-hot,0] - 4 classification
             '''
             ## current lesion centre
+            target_coordinates = world.get_target_coordinates()
+            self.target_centre = target_coordinates.mean(dim=1)
 
-            observe_step = [] # (6) indicating where to move the observation location
-            sample_depth = []  # (4) [depth0, depth1, depth2, observe]
-            sample_location = [] # (13, 13) grid location
+            ## find cloest observe location
+            status = (self.target_centre[2]-self.observe_x) & (self.target_centre[1]-self.observe_y) & (self.target_centre[0]-self.observe_d)
+
+            ## needle samples
+            return status, self.sample_needles()
+    
+    def sample_needles(self):
+            needle_samples = self.sampler(self.target, self.needle_samples_mm[self.sample_d][:,self.sample_x,self.sample_y,...])
+    
+    @staticmethod
+    # N.B. grid_sample uses image convention: 
+    #   return an interpolated volume in (y,x,z) order, here (j,i,k) or (h,w,d) 
+    # the input grid (...,3) should be in (x,y,z) coordinates
+    # whilst tensor convention: in (k,j,i) or (d,h,w)
+    def sampler(vol, coords):  
+        return torch.nn.functional.grid_sample(
+            input = vol, 
+            grid = coords, 
+            mode = 'bilinear', 
+            padding_mode = 'zeros',
+            align_corners = True
+            )
 
 
 ## transition classes
@@ -258,7 +296,11 @@ class UltrasoundSlicing():
         return 0
     
     @staticmethod
-    def reslice(vol, coords):
+    # N.B. grid_sample uses image convention: 
+    #   return an interpolated volume in (y,x,z) order, here (j,i,k) or (h,w,d) 
+    # the input grid (...,3) should be in (x,y,z) coordinates
+    # whilst tensor convention: in (k,j,i) or (d,h,w)
+    def reslice(vol, coords):  
         return torch.nn.functional.grid_sample(
             input = vol, 
             grid = coords, 
