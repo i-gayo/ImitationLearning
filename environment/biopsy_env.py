@@ -13,15 +13,19 @@ class TPBEnv:
     """
 
     def __init__(self, **kwargs):
+
+        MAX_STEPS = 100
+
+        self.max_steps = MAX_STEPS
         # TODO: config options to include other examples
         self.world = LabelledImageWorld(**kwargs)  # Example
         self.action = NeedleGuide(self.world)  # Example
         self.transition = DeformationTransition(self.world)  # Example
         self.observation = UltrasoundSlicing(self.world)  # Example
 
-    def run(self, num):
+    def run(self):
         episodes = []
-        for step in range(num):
+        for step in range(self.max_steps):
             self.action.update(self.world, self.observation)
             self.transition.update(self.world, self.action)
             self.observation.update(self.world)
@@ -35,7 +39,7 @@ class LabelledImageWorld:
     # TODO: Base class for other world data
     def __init__(self, gland: torch.Tensor, target: torch.Tensor, voxdims: list):
         INITIAL_OBSERVE_LOCATION = "random"  # ("random", "centre")
-        INITIAL_OBSERVE_RANGE = 0.2
+        INITIAL_OBSERVE_RANGE = 0.3
 
         self.device = gland.device
         # TODO: config options to include other examples
@@ -68,6 +72,10 @@ class LabelledImageWorld:
             )
         elif INITIAL_OBSERVE_LOCATION == "centre":
             self.observe_mm = torch.zeros(self.batch_size, 3).to(self.device)
+
+    @property
+    def observe_norm(self):
+        return self.convert_mm2norm(self.observe_mm)
 
     def get_reference_grid_mm(self):
         # reference_grid_*: (N, D, H, W, 3)
@@ -115,9 +123,9 @@ class LabelledImageWorld:
             self.target.squeeze(dim=1)[..., None].repeat_interleave(dim=4, repeats=3)
         ].reshape((self.batch_size, -1, 3))
 
-    def get_reference_slice_axial(self):
+    def get_reference_slice_axial(self, norm=True):
         # N.B. xy indexing for grid_sampling
-        return torch.stack(
+        reference_slice_axial = torch.stack(
             [
                 torch.stack(
                     torch.meshgrid(
@@ -140,10 +148,13 @@ class LabelledImageWorld:
             ],
             dim=0,
         ).to(self.device)
+        if norm:
+            reference_slice_axial = self.convert_mm2norm(reference_slice_axial)
+        return reference_slice_axial
 
-    def get_reference_slice_sagittal(self):
+    def get_reference_slice_sagittal(self, norm=True):
         # N.B. xy indexing for grid_sampling
-        return torch.stack(
+        reference_slice_sagittal = torch.stack(
             [
                 torch.stack(
                     torch.meshgrid(
@@ -166,6 +177,16 @@ class LabelledImageWorld:
             ],
             dim=0,
         ).to(self.device)
+        if norm:
+            reference_slice_sagittal = self.convert_mm2norm(reference_slice_sagittal)
+        return reference_slice_sagittal
+
+    def convert_mm2norm(self, input_tensor):
+        r = len(input_tensor.shape)
+        if r == 5:
+            return input_tensor / self.unit_dims.reshape(self.batch_size, 1, 1, 1, 3)
+        elif r == 2:
+             return input_tensor / self.unit_dims
 
 
 ## action sampling classes
@@ -186,9 +207,7 @@ class NeedleGuide:
         NEEDLE_LENGTH = 10  # in mm
         NUM_NEEDLE_DEPTHS = 3  # integer, [2, needle_length]
         NUM_NEEDLE_SAMPLES = NEEDLE_LENGTH  # int(2*NEEDLE_LENGTH+1)
-        # INITIAL_SAMPLE_LOCATION = "random"  # ("random", "centre")
-        POLICY = "lesion_centre"
-        # GUIDANCE = 'nb27' # 'nb8'
+        POLICY = "lesion_centre"  # GUIDANCE = 'nb27' # 'nb8'
         STEPSIZE = 5
 
         self.grid_size = GRID_SIZE
@@ -217,11 +236,17 @@ class NeedleGuide:
             self.sample_d,
         ) = self.get_needle_samples_mm(world.batch_size, world.device)
         # TODO: check the target covered by the guide locations
+        # convert to normalised coordinates, TODO: add any offset in mm here
+        self.needle_samples_norm = [
+            world.convert_mm2norm(mm) for mm in self.needle_samples_mm
+        ]
 
         ## initialise guidance
         # observe: two-class [negative, positive]
         # TODO: add different guidance method
-        self.observe_update = torch.zeros(world.batch_size, 3, 2, dtype=torch.bool, device=world.device)
+        self.observe_update = torch.zeros(
+            world.batch_size, 3, 2, dtype=torch.bool, device=world.device
+        )
 
     def get_needle_samples_mm(self, batch_size, device):
         needle_centre_d = torch.linspace(
@@ -259,7 +284,7 @@ class NeedleGuide:
                 ],
                 dim=0,
             )  # for each data in a batch then stack in dim=0
-            for centre_d in needle_centre_d
+            for centre_d in needle_centre_d  # note that the grid_sample function does not accept multi-channel grid input, so list is used here
         ]  # for each needle depth
         # initialise the sampling location
         """ if use an index of [n, NUM_NEEDLE_DEPTHS, y, x]
@@ -288,34 +313,46 @@ class NeedleGuide:
         if self.policy == "lesion_centre":
             """
             Implement "lesion_centre" policy:
-             step 1: check observe_mm nearest to the lesion centre, 
-             step 2.1: if false, update observe_update
-             step 2.2: if true, update sample_x, y, z, with largest CCL
+             - check observe_mm nearest to the lesion centre,
+             - if false, update observe_update
+             - if true, update sample_x, y, z, with largest CCL
             """
-            ## current lesion centre
+
             target_coordinates = world.get_target_coordinates()
-            self.target_centre = target_coordinates.mean(dim=1)
+            self.target_centre = target_coordinates.mean(dim=1)  # current lesion centre
 
-            ## difference between current observe location and lesion centre
-            d_t2o = self.target_centre-world.observe_mm
-
-            ## update observe_update
-            # if three_class: observe_update = ((self.target_centre-world.observe_mm) / (self.observe_stepsize*2)).round().sign() 
-            self.observe_update = torch.stack((d_t2o >= self.observe_stepsize, d_t2o <= -self.observe_stepsize), dim=2)
-            self.observe_update_mm = self.observe_update[...,0] * self.observe_stepsize - self.observe_update[...,1] * self.observe_stepsize
-            world.observe_mm += self.observe_update_mm
-
-            # step 2, update observe_update and sample_*
+            # if three_class: observe_update = ((self.target_centre-world.observe_mm) / (self.observe_stepsize*2)).round().sign()
             # self.observe_update = torch.nn.functional.one_hot((observe_update+1).type(torch.int64),num_classes=3)
+            d_t2o = (
+                self.target_centre - world.observe_mm
+            )  # difference between current observe location and lesion centre
+            self.observe_update = torch.stack(
+                (d_t2o >= self.observe_stepsize, d_t2o <= -self.observe_stepsize), dim=2
+            )
+            if self.observe_update.any():  # update observe_update
+                self.observe_update_mm = (
+                    self.observe_update[..., 0] * self.observe_stepsize
+                    - self.observe_update[..., 1] * self.observe_stepsize
+                )
+                world.observe_mm += self.observe_update_mm
 
-            ## needle samples
+            else:  # update sampled needles (batch,num_needle_depths,grid_size,grid_size,num_needle_samples)
+                needle_sampled = torch.concat(
+                    [
+                        self.sampler(
+                            world.target.type(torch.float32),
+                            self.needle_samples_norm[d],
+                        )
+                        for d in range(self.num_needle_depths)
+                    ],
+                    dim=1,
+                )
+                core_length = needle_sampled.sum(dim=4)
+
             return 0
 
     def sample_needles(self):
-        needle_samples = self.sampler(
-            self.target,
-            self.needle_samples_mm[self.sample_d][:, self.sample_x, self.sample_y, ...],
-        )
+        return 0
 
     @staticmethod
     # N.B. grid_sample uses image convention:
@@ -374,9 +411,9 @@ class UltrasoundSlicing:
         ## initial a list of slices with observation locations 1 orthogonal axial and 1 sagittal slices
         # centre: at the centre of the image volume, [(n,1,200,200,3),(n,96,200,1,3)]
         # TODO: support multiple non-orthogonal slices
-        self.reference_observe_slices_mm = [
-            world.get_reference_slice_axial(),
-            world.get_reference_slice_sagittal(),
+        self.reference_observe_slices_norm = [
+            world.get_reference_slice_axial(norm=True),
+            world.get_reference_slice_sagittal(norm=True),
         ]
 
         self.update(world)  # get initial observation
@@ -384,10 +421,10 @@ class UltrasoundSlicing:
     def update(self, world):
         # transformation TODO: add rotation for non-orthogonal reslicing
         slices_norm = [
-            (s + world.observe_mm.reshape(world.batch_size, 1, 1, 1, 3))
-            / world.unit_dims.reshape(world.batch_size, 1, 1, 1, 3)
-            for s in self.reference_observe_slices_mm
+            s + world.observe_norm.reshape(world.batch_size, 1, 1, 1, 3)
+            for s in self.reference_observe_slices_norm
         ]
+
         # interpolation
         gland_slices = [
             self.reslicer(world.gland.type(torch.float32), g) for g in slices_norm
