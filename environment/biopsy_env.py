@@ -6,14 +6,13 @@ class TPBEnv:
     # TODO: Base class for both BX and FX environments
     """
     Transperineal biopsy (TPB) environment
-    :param voxdims: float pytorch tensor [N, 3].
-    :param gland:   boolean 5D pytorch tensor [N, 1, D, H, W].
-    :param target:  boolean 5D pytorch tensor [N, 1, D, H, W].
+    :param voxdims: float pytorch tensor (N, 3).
+    :param gland:   boolean 5D pytorch tensor (N, 1, D, H, W).
+    :param target:  boolean 5D pytorch tensor (N, 1, D, H, W).
     :return: the base env
     """
 
     def __init__(self, **kwargs):
-
         MAX_STEPS = 100
 
         self.max_steps = MAX_STEPS
@@ -186,7 +185,7 @@ class LabelledImageWorld:
         if r == 5:
             return input_tensor / self.unit_dims.reshape(self.batch_size, 1, 1, 1, 3)
         elif r == 2:
-             return input_tensor / self.unit_dims
+            return input_tensor / self.unit_dims
 
 
 ## action sampling classes
@@ -337,10 +336,24 @@ class NeedleGuide:
                 world.observe_mm += self.observe_update_mm
 
             else:  # update sampled needles (batch,num_needle_depths,grid_size,grid_size,num_needle_samples)
-                needle_sampled = torch.concat([self.sampler(world.target.type(torch.float32), self.needle_samples_norm[d]) for d in range(self.num_needle_depths)], dim=1)
+                needle_sampled = torch.concat(
+                    [
+                        self.sampler(
+                            world.target.type(torch.float32),
+                            self.needle_samples_norm[d],
+                        )
+                        for d in range(self.num_needle_depths)
+                    ],
+                    dim=1,
+                )
                 core_length = needle_sampled.sum(dim=4)
-                needle_sampled_idx = (core_length == core_length.reshape(world.batch_size,-1).max(1)[0].reshape(world.batch_size,1,1,1)).nonzero
-                #TODO: check visually
+                needle_sampled_idx = (
+                    core_length
+                    == core_length.reshape(world.batch_size, -1)
+                    .max(1)[0]
+                    .reshape(world.batch_size, 1, 1, 1)
+                ).nonzero
+                # TODO: check visually
 
             return 0
 
