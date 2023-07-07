@@ -315,7 +315,7 @@ class NeedleGuide:
             Implement "lesion_centre" policy:
              - check observe_mm nearest to the lesion centre,
              - if false, update observe_update
-             - if true, update sample_x, y, z, with largest CCL
+             - if true, update sample_x, y, z, with nearest centre or largest CCL
             """
 
             target_coordinates = world.get_target_coordinates()
@@ -337,17 +337,10 @@ class NeedleGuide:
                 world.observe_mm += self.observe_update_mm
 
             else:  # update sampled needles (batch,num_needle_depths,grid_size,grid_size,num_needle_samples)
-                needle_sampled = torch.concat(
-                    [
-                        self.sampler(
-                            world.target.type(torch.float32),
-                            self.needle_samples_norm[d],
-                        )
-                        for d in range(self.num_needle_depths)
-                    ],
-                    dim=1,
-                )
+                needle_sampled = torch.concat([self.sampler(world.target.type(torch.float32), self.needle_samples_norm[d]) for d in range(self.num_needle_depths)], dim=1)
                 core_length = needle_sampled.sum(dim=4)
+                needle_sampled_idx = (core_length == core_length.reshape(world.batch_size,-1).max(1)[0].reshape(world.batch_size,1,1,1)).nonzero
+                #TODO: check visually
 
             return 0
 
