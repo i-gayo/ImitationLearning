@@ -7,8 +7,8 @@ class TPBEnv:
     """
     Transperineal biopsy (TPB) environment
     :param voxdims: float pytorch tensor (N, 3).
-    :param gland:   boolean 5D pytorch tensor (N, 1, D, H, W).
-    :param target:  boolean 5D pytorch tensor (N, 1, D, H, W).
+    :param gland:   boolean 5D pytorch tensor (N, C, Y, X, Z).
+    :param target:  boolean 5D pytorch tensor (N, C, Y, X, Z).
     :return: the base env
     """
 
@@ -37,6 +37,11 @@ class TPBEnv:
 class LabelledImageWorld:
     # TODO: Base class for other world data
     def __init__(self, gland: torch.Tensor, target: torch.Tensor, voxdims: list):
+        '''
+        gland: (y,x,z) volume
+        target: (y,x,z) volume
+        voxdims: (x,y,z) voxel dimensions mm/unit
+        '''
         INITIAL_OBSERVE_LOCATION = "random"  # ("random", "centre")
         INITIAL_OBSERVE_RANGE = 0.3
 
@@ -44,13 +49,13 @@ class LabelledImageWorld:
         # TODO: config options to include other examples
         self.gland = gland
         self.target = target
-        self.voxdims = voxdims
-        self.batch_size = self.gland.shape[0]
-        self.vol_size = list(self.gland.shape[2:5])
+        self.voxdims = voxdims  # x-y-z order
+        self.batch_size = self.gland.shape[0]  # x-y-z order
+        self.vol_size = [self.gland.shape[i] for i in [3,2,4]]
 
         # - The normalised image coordinate system, per torch convention [-1, 1]
         # - The physical image coordinate system, in mm centred at the image centre
-        #           such that coordinates_mm = coordinates_normliased * unit_dims (mm/unit)
+        #           such that coordinates_mm = coordinates_normliased * unit_dims (mm/unit), x-y-z order
         # align_corners=True, i.e. -1 and 1 are the centre points of the corner pixels (vs. corner/edge points)
         self.vol_size_mm = [
             [(s - 1) * vd for s, vd in zip(self.vol_size, n)] for n in self.voxdims
@@ -84,14 +89,14 @@ class LabelledImageWorld:
                 torch.stack(
                     torch.meshgrid(
                         torch.linspace(
-                            -self.vol_size_mm[n][0] / 2,
-                            self.vol_size_mm[n][0] / 2,
-                            self.vol_size[0],
-                        ),
-                        torch.linspace(
                             -self.vol_size_mm[n][1] / 2,
                             self.vol_size_mm[n][1] / 2,
                             self.vol_size[1],
+                        ),
+                        torch.linspace(
+                            -self.vol_size_mm[n][0] / 2,
+                            self.vol_size_mm[n][0] / 2,
+                            self.vol_size[0],
                         ),
                         torch.linspace(
                             -self.vol_size_mm[n][2] / 2,
@@ -123,23 +128,22 @@ class LabelledImageWorld:
         ].reshape((self.batch_size, -1, 3))
 
     def get_reference_slice_axial(self, norm=True):
-        # N.B. xy indexing for grid_sampling
         reference_slice_axial = torch.stack(
             [
                 torch.stack(
                     torch.meshgrid(
                         torch.linspace(
-                            -self.vol_size_mm[n][2] / 2,
-                            self.vol_size_mm[n][2] / 2,
-                            self.vol_size[2],
-                        ),
-                        torch.linspace(
                             -self.vol_size_mm[n][1] / 2,
                             self.vol_size_mm[n][1] / 2,
                             self.vol_size[1],
                         ),
+                        torch.linspace(
+                            -self.vol_size_mm[n][0] / 2,
+                            self.vol_size_mm[n][0] / 2,
+                            self.vol_size[0],
+                        ),
                         torch.tensor([0.0]),
-                        indexing="xy",
+                        indexing="ij",
                     ),
                     dim=3,
                 )
@@ -152,23 +156,22 @@ class LabelledImageWorld:
         return reference_slice_axial
 
     def get_reference_slice_sagittal(self, norm=True):
-        # N.B. xy indexing for grid_sampling
         reference_slice_sagittal = torch.stack(
             [
                 torch.stack(
                     torch.meshgrid(
-                        torch.tensor([0.0]),
                         torch.linspace(
                             -self.vol_size_mm[n][1] / 2,
                             self.vol_size_mm[n][1] / 2,
                             self.vol_size[1],
                         ),
+                        torch.tensor([0.0]),
                         torch.linspace(
-                            -self.vol_size_mm[n][0] / 2,
-                            self.vol_size_mm[n][0] / 2,
-                            self.vol_size[0],
+                            -self.vol_size_mm[n][2] / 2,
+                            self.vol_size_mm[n][2] / 2,
+                            self.vol_size[2],
                         ),
-                        indexing="xy",
+                        indexing="ij",
                     ),
                     dim=3,
                 )
@@ -258,27 +261,27 @@ class NeedleGuide:
                     torch.stack(
                         torch.meshgrid(
                             torch.linspace(
-                                -(self.grid_size[0] - 1) * self.grid_size[2] / 2,
-                                (self.grid_size[0] - 1) * self.grid_size[2] / 2,
-                                self.grid_size[0],
-                            ),
-                            torch.linspace(
                                 -(self.grid_size[1] - 1) * self.grid_size[2] / 2,
                                 (self.grid_size[1] - 1) * self.grid_size[2] / 2,
                                 self.grid_size[1],
+                            ),
+                            torch.linspace(
+                                -(self.grid_size[0] - 1) * self.grid_size[2] / 2,
+                                (self.grid_size[0] - 1) * self.grid_size[2] / 2,
+                                self.grid_size[0],
                             ),
                             torch.linspace(
                                 centre_d - self.needle_length / 2,
                                 centre_d + self.needle_length / 2,
                                 self.num_needle_samples,
                             ),
-                            indexing="xy",
+                            indexing="ij",
                         ),
                         dim=3,
                     ).to(device)
-                    + self.grid_centre[n, (2, 1, 0)].reshape(
+                    + self.grid_centre[n].reshape(
                         1, 1, 1, 3
-                    )  # convert to (x,y,z) from (k,j,i)
+                    )  
                     for n in range(batch_size)
                 ],
                 dim=0,
@@ -361,10 +364,6 @@ class NeedleGuide:
         return 0
 
     @staticmethod
-    # N.B. grid_sample uses image convention:
-    #   return an interpolated volume in (y,x,z) order, here (j,i,k) or (h,w,d)
-    # the input grid (...,3) should be in (x,y,z) coordinates
-    # whilst tensor convention: in (k,j,i) or (d,h,w)
     def sampler(vol, coords):
         return torch.nn.functional.grid_sample(
             input=vol,
@@ -454,10 +453,6 @@ class UltrasoundSlicing:
         """
 
     @staticmethod
-    # N.B. grid_sample uses image convention:
-    #   return an interpolated volume in (y,x,z) order, here (j,i,k) or (h,w,d)
-    # the input grid (...,3) should be in (x,y,z) coordinates
-    # whilst tensor convention: in (k,j,i) or (d,h,w)
     def reslicer(vol, coords):
         return torch.nn.functional.grid_sample(
             input=vol,
