@@ -3,7 +3,7 @@ import configparser
 import h5py
 import torch
 
-from environment.utils import grid_transform
+from environment.utils import GridTransform
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 torch.manual_seed(10)
@@ -28,6 +28,6 @@ target = torch.stack([targets == (i + 1) for i in range(num_t)]).unsqueeze(1)
 volume = torch.concat([gland, target], dim=1).type(torch.float32)[...,:-10,:]  # reduce x for debugging
 
 
-random_transform = grid_transform(grid_size=[7,8,4], volsize=[volume.shape[i] for i in [3,2,4]], batch_size=volume.shape[0], device=device)
-random_transform = random_transform.generate_random_transform()
+random_transform = GridTransform(grid_size=[7,8,4], volsize=[volume.shape[i] for i in [3,2,4]], batch_size=volume.shape[0], device=device)
+random_transform.generate_random_transform()
 transformed_volume = random_transform.warp(volume)

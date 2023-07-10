@@ -1,7 +1,7 @@
 import torch
 
 
-class spatial_transform:
+class SpatialTransform:
     """
     A class for spatial transformation for 3D image volume (batch,c,y,x,z)
     """
@@ -32,25 +32,32 @@ class spatial_transform:
         """
         :param vol: 5d (batch,c,y,x,z)
         """
-        return torch.nn.functional.grid_sample(vol, self.ddf)
+        self.compute_ddf()  # child class function
+        return torch.nn.functional.grid_sample(
+            vol, 
+            self.ddf,
+            mode="bilinear",
+            padding_mode="zeros",
+            align_corners=True)
 
 
-class global_affine(spatial_transform):
+class GlobalAffine(SpatialTransform):
     def __init__(self):
         super().__init__()
 
 
-class local_affine(spatial_transform):
+class LocalAffine(SpatialTransform):
     def __init__(self):
         super().__init__()
 
 
-class grid_transform(spatial_transform):
-    def __init__(self, grid_size, **kwargs):
+class GridTransform(SpatialTransform):
+    def __init__(self, grid_size, interp_type='linear', **kwargs):
         super().__init__(**kwargs)
         """
         :param grid_size: num of control points in (x,y,z) same size between batch_size volumes
         """
+        self.interp_type = interp_type
         self.grid_size = grid_size
         self.control_point_coords = (
             torch.stack(
@@ -82,7 +89,26 @@ class grid_transform(spatial_transform):
             * (torch.rand([self.batch_size, self.grid_size[1], self.grid_size[0], self.grid_size[2]]) < rate)[
                 ..., None
             ].repeat_interleave(dim=4, repeats=3)
-        )
+        ).to(self.device)
 
     def compute_ddf(self):
-        return 0
+        '''
+        Compute dense displacement field (ddf), interpolating displacement vectors on all voxels
+        '''
+        match self.interp_type:
+            case 'linear':
+                self.ddf = self.linear_interpolation(self.control_point_displacements,self.voxel_coords)
+            case 'spline_gauss':
+                print('Yet implemented.')
+            case 'nspline':
+                print('Yet implemented.')
+        
+    @staticmethod
+    def linear_interpolation(volumes, coords):
+        return torch.nn.functional.grid_sample(
+            input=volumes.permute(0,4,1,2,3),  # permute to (batch,c,y,x,z), c=yxz
+            grid=coords,  # (batch,y,x,z,yxz)
+            mode="bilinear",
+            padding_mode="zeros",
+            align_corners=True,
+        ).permute(0,2,3,4,1) # back to (batch,y,x,z,xyz)
