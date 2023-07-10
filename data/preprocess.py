@@ -14,6 +14,7 @@ LOCAL_PATH_GLAND = cfg['Data']['LOCAL_PATH_GLAND']
 LOCAL_PATH_TARGETS = cfg['Data']['LOCAL_PATH_TARGETS']
 TARGET_VOLUME_LOW = eval(cfg['Preprocess']['TARGET_VOLUME_LOW'])
 FLAG_DT = eval(cfg['Preprocess']['PRECOMPUTE_DT'])
+FLAG_YXZ = eval(cfg['Preprocess']['YXZ_3D'])
 
 H5FILE_BIN = cfg['Preprocess']['FILE_PREFIX'] + 'bin.h5'
 if FLAG_DT:
@@ -34,6 +35,9 @@ def main():
     all written in a single h5 file, separating targets and gland (and binary and dt) for memory when reading
     '''
 
+    if FLAG_YXZ:  # convert z-y-x -> y-x-z
+        image_dim_order = [1,2,0]
+
     fh5_bin = h5py.File(H5FILE_BIN, 'w')
     if FLAG_DT:
         fh5_dt_g = h5py.File(H5FILE_DT_GLAND, 'w')
@@ -53,7 +57,9 @@ def main():
 
         ## read targets
         targets = sitk.ReadImage(filename, outputPixelType=sitk.sitkUInt8)
-        voxdims = targets.GetSpacing()[::-1]
+        voxdims = targets.GetSpacing()
+        if not FLAG_YXZ:
+            voxdims = voxdims[::-1]
         # fh5_bin_g.create_dataset('/voxdims_%04d' % case_idx,len(voxdims),data=voxdims)
 
         two_way_dt = lambda x: (distance_transform(1-x,sampling=voxdims)-distance_transform(x,sampling=voxdims)).astype('float16')
@@ -71,6 +77,8 @@ def main():
                 # update num and volumes after removal
                 num = targets_array.max()
                 volumes = [(targets_array==(id+1)).sum() for id in range(num)]
+        if FLAG_YXZ:
+            targets_array = targets_array.transpose(image_dim_order)
         write_h5_array(fh5_bin, '/targets_%04d' % case_idx, targets_array)
 
         ## read gland
@@ -79,6 +87,8 @@ def main():
             outputPixelType=sitk.sitkUInt8 )
         #TODO: check meta data consistency
         gland_array = sitk.GetArrayFromImage(gland)
+        if FLAG_YXZ:
+            gland_array = gland_array.transpose(image_dim_order)
         write_h5_array(fh5_bin, '/gland_%04d' % case_idx, gland_array)
 
         ## compute DT
