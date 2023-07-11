@@ -34,11 +34,12 @@ class SpatialTransform:
         """
         self.compute_ddf()  # child class function
         return torch.nn.functional.grid_sample(
-            vol, 
-            self.ddf,
+            vol,
+            self.ddf + self.voxel_coords,
             mode="bilinear",
             padding_mode="zeros",
-            align_corners=True)
+            align_corners=True,
+        )
 
 
 class GlobalAffine(SpatialTransform):
@@ -52,7 +53,7 @@ class LocalAffine(SpatialTransform):
 
 
 class GridTransform(SpatialTransform):
-    def __init__(self, grid_size, interp_type='linear', **kwargs):
+    def __init__(self, grid_size, interp_type="linear", **kwargs):
         super().__init__(**kwargs)
         """
         :param grid_size: num of control points in (x,y,z) same size between batch_size volumes
@@ -83,32 +84,54 @@ class GridTransform(SpatialTransform):
         :param scale: [0,1] scale of unit grid size the random displacement
         """
         self.control_point_displacements = (
-            torch.rand([self.batch_size, self.grid_size[1], self.grid_size[0], self.grid_size[2], 3])
-            * torch.tensor(self.grid_dims).reshape(1, 1, 1, 1, 3)
+            torch.rand(
+                [
+                    self.batch_size,
+                    self.grid_size[1],
+                    self.grid_size[0],
+                    self.grid_size[2],
+                    3,
+                ]
+            )
+            * torch.tensor([self.grid_dims[i] for i in [1, 0, 2]]).reshape(
+                1, 1, 1, 1, 3
+            )
             * scale
-            * (torch.rand([self.batch_size, self.grid_size[1], self.grid_size[0], self.grid_size[2]]) < rate)[
-                ..., None
-            ].repeat_interleave(dim=4, repeats=3)
+            * (
+                torch.rand(
+                    [
+                        self.batch_size,
+                        self.grid_size[1],
+                        self.grid_size[0],
+                        self.grid_size[2],
+                    ]
+                )
+                < rate
+            )[..., None].repeat_interleave(dim=4, repeats=3)
         ).to(self.device)
 
     def compute_ddf(self):
-        '''
+        """
         Compute dense displacement field (ddf), interpolating displacement vectors on all voxels
-        '''
+        """
         match self.interp_type:
-            case 'linear':
-                self.ddf = self.linear_interpolation(self.control_point_displacements,self.voxel_coords)
-            case 'spline_gauss':
-                print('Yet implemented.')
-            case 'nspline':
-                print('Yet implemented.')
-        
+            case "linear":
+                self.ddf = self.linear_interpolation(
+                    self.control_point_displacements, self.voxel_coords
+                )
+            case "spline_gauss":
+                print("Yet implemented.")
+            case "nspline":
+                print("Yet implemented.")
+
     @staticmethod
     def linear_interpolation(volumes, coords):
         return torch.nn.functional.grid_sample(
-            input=volumes.permute(0,4,1,2,3),  # permute to (batch,c,y,x,z), c=yxz
+            input=volumes.permute(0, 4, 1, 2, 3),  # permute to (batch,c,y,x,z), c=yxz
             grid=coords,  # (batch,y,x,z,yxz)
             mode="bilinear",
             padding_mode="zeros",
             align_corners=True,
-        ).permute(0,2,3,4,1) # back to (batch,y,x,z,xyz)
+        ).permute(
+            0, 2, 3, 4, 1
+        )  # back to (batch,y,x,z,xyz)
