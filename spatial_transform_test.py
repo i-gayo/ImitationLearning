@@ -32,11 +32,13 @@ random_transform = GridTransform(grid_size=[7,8,4], volsize=[volume.shape[i] for
 random_transform.generate_random_transform()
 transformed_volume = random_transform.warp(volume)
 
-"""debug
+#"""debug
 import SimpleITK as sitk
-threshold = 0.45
+threshold = 0.45    
 for b in range(volume.shape[0]):
-    sitk.WriteImage(sitk.GetImageFromArray((transformed_volume[b,0,...].squeeze().cpu().numpy()>=threshold).astype('uint8')*255), 'b%d_gland.nii'%b)
-    sitk.WriteImage(sitk.GetImageFromArray((transformed_volume[b,1,...].squeeze().cpu().numpy()>=threshold).astype('uint8')*255), 'b%d_target.nii'%b)
-print('0')
-"""
+    sitk.WriteImage(sitk.GetImageFromArray((volume[b,0,...].squeeze().cpu().numpy()>=threshold).astype('uint8')*255), 'b%d_gland.nii'%b)
+    sitk.WriteImage(sitk.GetImageFromArray((volume[b,1,...].squeeze().cpu().numpy()>=threshold).astype('uint8')*255), 'b%d_target.nii'%b)
+    sitk.WriteImage(sitk.GetImageFromArray((transformed_volume[b,0,...].squeeze().cpu().numpy()>=threshold).astype('uint8')*255), 'b%d_gland_transformed.nii'%b)
+    sitk.WriteImage(sitk.GetImageFromArray((transformed_volume[b,1,...].squeeze().cpu().numpy()>=threshold).astype('uint8')*255), 'b%d_target_transformed.nii'%b)
+print('volumes saved.')
+#"""

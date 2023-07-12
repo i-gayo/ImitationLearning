@@ -80,7 +80,7 @@ class GridTransform(SpatialTransform):
     def generate_random_transform(self, rate=0.25, scale=0.1):
         """
         Generate random displacements on control points dcp (uniform distribution)
-        :param rate: [0,1] x100% percentage of all control points in use
+        :param rate: [0,1] *100% percentage of all control points in use
         :param scale: [0,1] scale of unit grid size the random displacement
         """
         self.control_point_displacements = (
@@ -113,15 +113,16 @@ class GridTransform(SpatialTransform):
     def compute_ddf(self):
         """
         Compute dense displacement field (ddf), interpolating displacement vectors on all voxels
+        N.B. like all volume data, self.ddf is in y-x-z order
         """
         match self.interp_type:
             case "linear":
                 self.ddf = self.linear_interpolation(
                     self.control_point_displacements, self.voxel_coords
                 )
-            case "spline_gauss":
+            case "g-spline_gauss":
                 print("Yet implemented.")
-            case "nspline":
+            case "b-spline":
                 print("Yet implemented.")
 
     @staticmethod
@@ -132,6 +133,4 @@ class GridTransform(SpatialTransform):
             mode="bilinear",
             padding_mode="zeros",
             align_corners=True,
-        ).permute(
-            0, 2, 3, 4, 1
-        )  # back to (batch,y,x,z,xyz)
+        ).permute(0, 2, 3, 4, 1)  # back to (batch,y,x,z,yxz)
