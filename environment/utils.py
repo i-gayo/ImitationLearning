@@ -24,7 +24,7 @@ class SpatialTransform:
                 ),
                 dim=3,
             )[None, ...]
-            .expand(self.batch_size,-1,-1,-1,-1)
+            .expand(self.batch_size, -1, -1, -1, -1)
             .to(self.device)
         )
 
@@ -72,7 +72,7 @@ class GridTransform(SpatialTransform):
                 ),
                 dim=3,
             )[None, ...]
-            .expand(self.batch_size,-1,-1,-1,-1)
+            .expand(self.batch_size, -1, -1, -1, -1)
             .to(self.device)
         )
         self.grid_dims = [2 / (self.grid_size[i] - 1) for i in [0, 1, 2]]  # (x,y,z)
@@ -85,7 +85,7 @@ class GridTransform(SpatialTransform):
                 self.grid_size[0] * self.grid_size[1] * self.grid_size[2]
             )
             num_voxels = self.volsize[0] * self.volsize[1] * self.volsize[2]
-            """ computing all distance is not efficient
+            """ does not work due to inefficient memory use
             d_p2c = self.control_point_coords.reshape(
                 self.batch_size,-1,1,3).expand(-1,-1,num_voxels,3)
             - self.voxel_coords.reshape(
@@ -127,7 +127,7 @@ class GridTransform(SpatialTransform):
                     ]
                 )
                 < rate
-            )[..., None].expand(-1,-1,-1,-1,3)
+            )[..., None].expand(-1, -1, -1, -1, 3)
         ).to(self.device)
 
     def compute_ddf(self):
@@ -161,37 +161,47 @@ class GridTransform(SpatialTransform):
         )  # back to (batch,y,x,z,yxz)
 
     def transpose_conv_upsampling(self, sigma_voxel=[1, 1, 1]):
+        """
+        Using transpose convolution to approximate Gaussian spline transformation
+        :param sigma_voxel: (x,y,z) Gaussian spline parameter sigma in voxel (the larger sigma the smoother transformation)
+        """
         voxdims = [2 / (v - 1) for v in self.volsize]
         grid_dims = [2 / (u - 1) for u in self.grid_size]
-        tails = [int(sigma_voxel[d] * 3) for d in [0, 1, 2]]
         gauss_pdf = lambda x, sigma: 2.71828 ** (-0.5 * x**2 / sigma**2)
+        strides = [int(grid_dims[d] / voxdims[d]) for d in [0, 1, 2]]
+
+        # make sure tails are odd numbers that can be used for centre-aligning padding
+        tails = [int(sigma_voxel[d] * 3) for d in [0, 1, 2]]
         kernels_1d = [
             torch.tensor(
                 [gauss_pdf(x, sigma_voxel[d]) for x in range(-tails[d], tails[d] + 1)],
                 device=self.device,
             )
             for d in [0, 1, 2]
-        ] # make sure tails are odd numbers that can be used for padding
-        #N.B normalising by sum does not preserve control point displacement
-        #TODO: normalising using control point displacement for displacement-preserving alternative
-        kernels_1d = [k/k.sum() for k in kernels_1d]  
-        strides = [int(grid_dims[d] / voxdims[d]) for d in [0, 1, 2]]
+        ]  
 
+        # N.B normalising by sum does not preserve control point displacements
+        # TODO: normalising using control point displacement for displacement-preserving alternative
+        kernels_1d = [k / k.sum() for k in kernels_1d]
+
+        # padding so centres are aligned
         ddf = torch.nn.functional.conv_transpose3d(
             torch.nn.functional.conv_transpose3d(
                 torch.nn.functional.conv_transpose3d(
                     input=self.control_point_displacements.permute(0, 4, 1, 2, 3),
-                    weight=kernels_1d[1].reshape(1, 1, -1, 1, 1).expand(3, 3, -1, -1, -1),
+                    weight=kernels_1d[1]
+                    .reshape(1, 1, -1, 1, 1)
+                    .expand(3, 3, -1, -1, -1),
                     stride=(strides[1], 1, 1),
-                    padding=(tails[1],0,0)  # padding so centre aligned
+                    padding=(tails[1], 0, 0),  
                 ),
                 weight=kernels_1d[0].reshape(1, 1, 1, -1, 1).expand(3, 3, -1, -1, -1),
                 stride=(1, strides[0], 1),
-                padding=(0,tails[0],0)
+                padding=(0, tails[0], 0),
             ),
             weight=kernels_1d[2].reshape(1, 1, 1, 1, -1).expand(3, 3, -1, -1, -1),
             stride=(1, 1, strides[2]),
-            padding=(0,0,tails[2])
+            padding=(0, 0, tails[2]),
         )
         ddf = torch.nn.functional.grid_sample(
             input=ddf,  # (batch,yxz,y,x,z)
