@@ -1,8 +1,8 @@
 import torch 
 from torch import nn as nn 
 import numpy as np 
-from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
-import gym 
+#from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
+#import gym 
 
 class UNet(torch.nn.Module):
 
@@ -246,6 +246,84 @@ class ImitationNetwork(nn.Module):
         # Turn image from channel x row x column -> channel x row x column x depth for pre-processing with 3D layers 
 
         return split_channel_image
+
+class Imitation_Conv(nn.Module):
+    """
+    # Input : 1 x 100 x 100 x 75 
+    :param observation_space: (gym.Space)
+    :param features_dim: (int) Number of features extracted.
+        Correspods to the number of unit for the last layer.
+    """
+
+    def __init__(self, num_input_channels = 3, features_dim: int = 512, multiple_frames = False, num_multiple_frames = 3, num_actions = 3):
+        
+        super(Imitation_Conv, self).__init__()
+        # Assumes CxHxW images (channels first)
+        # Re-ordering will be done by pre-preprocessing or wrapper
+
+        num_input_channels = 5
+        self.cnn_layers = nn.Sequential(
+
+            # First layer like resnet, stride = 2
+            nn.Conv3d(num_input_channels, 32, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm3d(32),
+            nn.ReLU(),
+
+            # Apply pooling layer in between 
+            nn.MaxPool3d(kernel_size = 3, stride = 2, padding = 1),
+
+            nn.Conv3d(32, 64, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm3d(64),
+            nn.ReLU(),
+
+            # Apply pooling layer in between 
+            nn.MaxPool3d(kernel_size = 3, stride = 2, padding = 1),
+            nn.Conv3d(64, 128, kernel_size=3, stride=1),
+            nn.BatchNorm3d(128),
+            nn.ReLU()
+        )
+
+        #Flatten layers 
+        self.flatten = nn.Flatten()
+
+        # Compute shape by doing one forward pass
+        with torch.no_grad():
+            all_layers = nn.Sequential(self.cnn_layers, self.flatten)
+            
+            #observation_space_shuffled = np.transpose(observation_space.sample(), [2, 1, 0])
+            #n_flatten = all_layers(torch.as_tensor(observation_space_shuffled[None]).float()).shape[1]
+            #processed_obs_space = self._pre_process_image(torch.zeros))).float()
+            processed_obs_space = torch.zeros([1, 5, 100, 100, 24])
+            n_flatten = all_layers(processed_obs_space).shape[1]  
+
+        self.linear = nn.Sequential(nn.Linear(n_flatten, features_dim), nn.ReLU())
+
+        # Output layers for converting from features_dim -> num_actions. Output = Mean of each action 
+        self.final_linear = nn.Sequential(nn.Linear(features_dim, num_actions ), nn.Tanh())
+
+    def forward(self, observations: torch.Tensor) -> torch.Tensor:
+        
+        #if len(np.shape(observations)) == 4:
+        #     observations = self._pre_process_image(observations.squeeze(0))
+        # elif len(np.shape(observations)) == 7:
+        #     observations = self._pre_process_image(observations.squeeze(0))
+        # else:
+        #     observations = self._pre_process_image(observations.unsqueeze(0))
+        # observations = observations.float() 
+        
+        # output = self.cnn_layers(observations)
+        # output = self.flatten(output)
+        # output = self.linear(output)
+        # output = self.final_linear(output)
+        
+        #observations = self._pre_process_image(observations)
+        observations = observations.float() 
+        output = self.cnn_layers(observations)
+        output = self.flatten(output)
+        output = self.linear(output)
+        output = self.final_linear(output)
+
+        return output
 
 if __name__ == '__main__':
 

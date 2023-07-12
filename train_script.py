@@ -68,7 +68,7 @@ parser.add_argument('--data_mode',
                     metavar='data_mode',
                     type=str,
                     action='store',
-                    default='l2l',
+                    default='wacky',
                     help='Which training data to use : c2l, n2n or l2l')
 
 parser.add_argument('--train_strategy',
@@ -76,7 +76,7 @@ parser.add_argument('--train_strategy',
                     metavar='train_strategy',
                     type=str,
                     action='store',
-                    default='subsample',
+                    default='individual',
                     help='Which training strategy to use : individual, subsample or sequential')
 
 parser.add_argument('--using_rl',
@@ -208,6 +208,31 @@ class GridArray():
 
         x_idx = action[1]*5
         y_idx = action[0]*5
+        needle_fired = (action[2] == 1)
+
+        #Converts range from (-30,30) to image grid array
+        x_idx = (x_idx) + 50
+        y_idx = (y_idx) + 50
+
+        x_grid_pos = int(x_idx)
+        y_grid_pos = int(y_idx)
+
+        depth_map = {0 : 1, 1 : int(0.5*max_depth), 2 : max_depth}
+        depth = depth_map[int(action[2])]
+
+        needle_vol[y_grid_pos-1:y_grid_pos+ 2, x_grid_pos-1:x_grid_pos+2, 0:depth ] = 1
+
+        return needle_vol 
+
+    def create_needle_vol_wacky(self, action, max_depth):
+        """
+        A function that creates needle volume 100 x 100 x 24 
+        """
+        
+        needle_vol = np.zeros([100,100,24])
+
+        x_idx = action[0]*5
+        y_idx = action[1]*5
         needle_fired = (action[2] == 1)
 
         #Converts range from (-30,30) to image grid array
@@ -863,7 +888,7 @@ def separate_actions(comb_actions, all_ids, idx):
     :sep_actions: 3 x num_steps where num_steps is the number of steps corresponding to chosen idx lesion 
     """
 
-    # obtain idx of actions corresponding to lesion 
+
     idx_map = (all_ids == idx)[0]
 
     # return actions corresponding to lesion idx only 
@@ -1021,20 +1046,26 @@ class TimeStep_data_steps(Dataset):
         all_pos = np.array(patient_file['current_pos'])
 
         # obtain lesion mask: 
-        multiple_masks = patient_file['multiple_lesion_img']
+        multiple_masks = np.array(patient_file['multiple_lesion_img'])
         NUM_LESIONS = len(np.unique(multiple_masks)) - 1 # remove background as 1
         all_ids = np.array(patient_file['action_identifiers'])
+        all_obs_ids = np.array(patient_file['obs_identifiers'])
         
         if (self.step == 'c2l') or (self.step == 'n2n'): #c2l or n2n 
 
             # sample lesion 
             lesion_idx = np.random.choice((np.arange(1, NUM_LESIONS)))
+            
+            lesion_idx = 1
             lesion_mask = separate_masks(multiple_masks, lesion_idx)
+            lesion_mask = 1*(np.array(multiple_masks) == lesion_idx)[::2,::2,::4]
 
+            # if mask is empty -> re-sample different index!!! 
+            
             # separate lesion actions and current grid positions 
 
             lesion_actions = separate_actions(all_actions, all_ids, lesion_idx-1)
-            lesion_positions = separate_actions(all_pos, all_ids, lesion_idx-1)
+            lesion_positions = separate_actions(all_pos, all_obs_ids, lesion_idx-1)
             NUM_ACTIONS_LESION = np.shape(lesion_actions)[0]
 
             needle_vol = []
@@ -1102,7 +1133,7 @@ class TimeStep_data_steps(Dataset):
             # for pos_idx in range(NUM_ACTIONS):
             #     current_pos = all_pos[pos_idx,:]
             #     needle_vol.append(self.vol_creater.create_needle_vol(current_pos, max_depth))
-
+            
             if random_idx == 0:
                 #sampled_grid = np.array([np.zeros((100,100)), np.zeros((100,100)), np.array(all_grids[random_idx])])
                 needle_vol = self.vol_creater.create_needle_vol(all_pos[random_idx, :], max_depth)
@@ -1193,6 +1224,486 @@ class TimeStep_data_steps(Dataset):
 
         return combined_tumour_prostate 
 
+class TimeStep_data_steps_pt1(Dataset):
+
+    def __init__(self, folder_name, csv_path= 'csv_file.csv', labels_path = 'action_labels.h5', mode = 'train', step = 'c2l', single_patient = False, T = 3):
+
+        self.folder_name = folder_name
+        self.mode = mode
+        self.labels_path = labels_path
+        self.step = step # string only 'c2l', 'n2n', 'l2l' 
+        self.single_patient = single_patient
+        self.T = T # number of timesteps to use for channel 
+        
+        # Obtain list of patient names with multiple lesions -> change to path name
+        #df_dataset = pd.read_csv('/raid/candi/Iani/Biopsy_RL/patient_data_multiple_lesions.csv')
+        #z3df_dataset = pd.read_csv('/Users/ianijirahmae/Documents/PhD_project/MRes_project/Reinforcement Learning/patient_data_multiple_lesions.csv')
+        df_dataset = pd.read_csv(csv_path)
+        
+        #Filter out patients >=5 lesions 
+        patients_w5 = np.where(df_dataset[' num_lesions'] >= 5)[0] # save these indices for next time!!!
+        # Remove patients where lesions >5 as these are incorrectly labelled!!
+        df_dataset = df_dataset.drop(df_dataset.index[patients_w5])
+    
+        self.all_file_names = df_dataset['patient_name'].tolist()
+        self.num_lesions = df_dataset[' num_lesions'].tolist()
+        
+        self.vol_creater = GridArray() 
+
+        # read h5 file 
+        self.grid_labels = h5py.File(labels_path, 'r')
+        size_dataset = len(self.all_file_names)
+        train_len = int(size_dataset * 0.7) 
+        test_len = int(size_dataset * 0.2) 
+        val_len = size_dataset - (train_len + test_len)
+
+        # both test and val have simila rnumber of lesions (mean = 2.4 lesions)
+        self.train_names = self.all_file_names[0:train_len]
+        self.val_names = self.all_file_names[train_len:train_len + val_len]
+        self.test_names = self.all_file_names[train_len + val_len:]
+        self.dataset_len = {'train' : train_len, 'test': test_len, 'val' : val_len}
+
+        # Folder names
+        self.lesion_folder = os.path.join(folder_name, 'lesion')
+        self.mri_folder = os.path.join(folder_name, 't2w')
+        self.prostate_folder = os.path.join(folder_name, 'prostate_mask')
+
+    def _normalise(self, img):
+        """
+        A function that converts an image volume from np.float64 to uint8 
+        between 0 to 255
+
+        """
+
+        max_img = np.max(img)
+        min_img = np.min(img)
+
+        #Normalise values between 0 to 1
+        normalised_img =  ((img - min_img)/(max_img - min_img)) 
+
+        return normalised_img.astype(np.float32)
+    
+    def _normalise_actions(self, actions):
+
+        normalised_actions = np.zeros_like(actions)
+
+        # First two actions x,y in delta range (-2,2)
+        normalised_actions[0:2] = actions[0:2] / 2
+        #normalised_actions[-1] = (actions[-1] - 0.5) *2 
+        normalised_actions[-1] = actions[2] - 1
+
+        return normalised_actions 
+
+    def __len__(self):
+        return self.dataset_len[self.mode]
+ 
+    def __getitem__(self, idx):
+        """
+        Gets items from train, test, val 
+
+        # From each patient idx 
+            # randomly sample 3 sequential images starting from i = 1 
+            # randomly sample 3 images 
+
+        Returns:
+        ------------
+        template_grid : 100 x 100 x 25 (dataset)
+        actions: 
+        """
+
+        if self.mode == 'train':
+            #idx_ = idx
+            if self.single_patient: 
+                idx = 1
+            patient_name = self.train_names[idx]
+
+        elif self.mode == 'val':
+            #idx_ = idx + self.dataset_len['train']
+            patient_name = self.val_names[idx]
+
+        elif self.mode == 'test':
+            #idx_ = idx + self.dataset_len['train'] + self.dataset_len['val']
+            patient_name = self.test_names[idx]
+
+        # Read prostate mask, lesion mask, prostate mask separately using ImageReader    
+        #patient_name = self.all_file_names[idx_]
+        read_img = ImageReader()    
+        mri_vol = np.transpose(self._normalise(read_img(os.path.join(self.mri_folder, patient_name))), [1, 2, 0])
+        lesion_mask = np.transpose(self._normalise(read_img(os.path.join(self.lesion_folder, patient_name))), [1, 2, 0])
+        prostate_mask = np.transpose(self._normalise(read_img(os.path.join(self.prostate_folder, patient_name))), [1, 2, 0])
+        
+        # downsampled prostate mask 
+        ds_prostate_mask = prostate_mask[::2,::2,::4]
+        max_depth = np.max(np.where(ds_prostate_mask == 1)[-1])
+        ds_lesion_mask = lesion_mask[::2,::2,::4]
+
+        # Obtain combined prostate_lesion and turn into torch tensor
+        combined_mask = (torch.from_numpy(self.get_img_mask(prostate_mask, lesion_mask))[0::2, 0::2, 0::4])/2
+        
+        # Get file path name 
+        sitk_img_path = os.path.join(self.lesion_folder, patient_name)
+
+        # Read grid image label 
+        patient_file = self.grid_labels[patient_name]
+        all_actions = np.array(patient_file['all_actions'])
+        #all_grids = np.array(patient_file['all_grids'])
+        all_pos = np.array(patient_file['current_pos'])
+        #all_obs_ids= np.array(patient_file['obs_identifiers'])
+
+        # obtain lesion mask: 
+        multiple_masks = patient_file['multiple_lesion_img']
+        NUM_LESIONS = len(np.unique(multiple_masks)) - 1 # remove background as 1
+        all_ids = np.array(patient_file['action_identifiers'])
+        
+        if (self.step == 'c2l') or (self.step == 'n2n'): #c2l or n2n 
+
+            # sample lesion 
+            lesion_idx = np.random.choice((np.arange(1, NUM_LESIONS)))
+            #lesion_mask = separate_masks(multiple_masks, lesion_idx)
+            lesion_mask = 1*(np.array(multiple_masks) == lesion_idx)[::2,::2,::4]
+            
+            # resample if empty
+            empty_mask = (len(np.unique(lesion_mask)) == 1)
+            
+            while empty_mask:
+                lesion_idx = np.random.choice((np.arange(1, NUM_LESIONS)))
+                #lesion_mask = separate_masks(multiple_masks, lesion_idx)
+                lesion_mask = 1*(np.array(multiple_masks) == lesion_idx)[::2,::2,::4]
+
+            # separate lesion actions and current grid positions 
+            lesion_actions = separate_actions(all_actions, all_ids, lesion_idx-1)
+            lesion_positions = separate_actions(all_pos, all_ids, lesion_idx-1)
+            NUM_ACTIONS_LESION = np.shape(lesion_actions)[0]
+
+            # needle_vol = []
+            # for pos_idx in range(NUM_ACTIONS_LESION):
+            #     current_pos = lesion_positions[pos_idx,:]
+            #     needle_vol.append(self.vol_creater.create_needle_vol(current_pos, max_depth))
+
+            if self.step == 'c2l': #centre to each lesion -> start from first action only, ie action_idx = 0 
+                random_idx = 0 
+            elif self.step == 'n2n':
+                random_idx = np.random.choice(np.arange(1, NUM_ACTIONS_LESION))
+            else:
+                random_idx = np.random.choice(np.arange(0, NUM_ACTIONS_LESION))
+                
+            ### OBTAIN ACTIONS 
+            final_action = lesion_actions[random_idx,:] # Only consider final action to be estimated
+            
+            ### OBTAIN OBSERVATIONS 
+
+            # Fixed from time step T - 2 : T instead of T : T+2
+            needle_stack = self.get_obs(random_idx, lesion_positions, max_depth)
+            
+            all_grid = torch.zeros((100,100,24))
+            # for lesion_idx in range(1,NUM_LESIONS+1):
+            #     lesion_positions = separate_actions(all_pos, all_obs_ids, lesion_idx-1)
+            #     lesion_actions = separate_actions(all_actions, all_ids, lesion_idx-1)
+            print(f"lesion_idx : {lesion_idx}")
+            for i in range(len(lesion_actions)):
+                all_grid += self.vol_creater.create_needle_vol(lesion_positions[i, :], max_depth)
+            plt.figure()
+            #plt.imshow(np.max(all_grid.numpy(), axis =2)*10 + np.max(lesion_mask, axis = 2))
+            plt.imshow(np.max(all_grid.numpy(), axis =2)*10 + np.max(multiple_masks[::2,::2,::4], axis = 2))
+            # if random_idx == 0:
+            #     #sampled_grid = np.array([np.zeros((100,100)), np.zeros((100,100)), np.array(all_grids[random_idx])])
+            #     # start array : 
+            #     needle_stack = torch.tensor(np.array([np.zeros([100,100,24]), np.zeros([100,100,24]), needle_vol[random_idx]]))
+            # elif random_idx == 1:
+            #     #sampled_grid = np.array([np.zeros((100,100)), np.array(all_grids[random_idx-1]), np.array(all_grids[random_idx])])
+            #     needle_stack = torch.tensor(np.array([np.zeros([100,100,24]), needle_vol[random_idx-1], needle_vol[random_idx]]))
+            # else:
+            #     #sampled_grid = all_grids[random_idx - 2 :random_idx+1 , :]
+            #     needle_stack = torch.tensor(np.array(needle_vol[random_idx-2 : random_idx+1]))
+                
+            # Combined grid : Contains template grid pos chosen at time steps t-3 : T
+            # Final action : Action to take from time step T 
+            final_action = torch.tensor(self._normalise_actions(final_action))#, axis = 0)
+
+            #TODO : test this!!! Additional informaiton for metrics computation 
+            downsampled_lesion_mask = lesion_mask
+            lesion_centroids = np.array(patient_file['lesion_centroids']) # lesion centroids for computing distance metric
+            action_identifier = lesion_idx 
+            #all_identifiers = np.array(patient_file['action_identifiers']) # index of lesions to visit 
+            #action_identifier = int(all_identifiers[0,random_idx])
+            tumour_centroid = lesion_centroids[action_identifier,:]
+
+            ## Obtain observation of needle volumes: 
+            obs_stack = torch.cat((torch.tensor(lesion_mask).unsqueeze(0), torch.tensor(ds_prostate_mask).unsqueeze(0), needle_stack), axis = 0)
+
+            # Obtain actions and current position at time step chosen 
+            grid_pos = all_pos[random_idx, :]
+
+        elif self.step == 'wacky':
+            
+            all_obs_ids= np.array(patient_file['obs_identifiers'])
+            
+            # sample lesion 
+            lesion_idx = np.random.choice((np.arange(1, NUM_LESIONS)))
+            #lesion_mask = separate_masks(multiple_masks, lesion_idx)
+            lesion_mask = 1*(np.array(multiple_masks) == lesion_idx)[::2,::2,::4]
+            
+            # resample if empty
+            empty_mask = (len(np.unique(lesion_mask)) == 1)
+            
+            while empty_mask:
+                lesion_idx = np.random.choice((np.arange(1, NUM_LESIONS)))
+                #lesion_mask = separate_masks(multiple_masks, lesion_idx)
+                lesion_mask = 1*(np.array(multiple_masks) == lesion_idx)[::2,::2,::4]
+
+            # separate lesion actions and current grid positions 
+            lesion_actions = separate_actions(all_actions, all_ids, lesion_idx-1)
+            lesion_positions = separate_actions(all_pos, all_obs_ids, lesion_idx-1)
+            NUM_ACTIONS_LESION = np.shape(lesion_actions)[0]
+        
+                
+            ### OBTAIN ACTIONS 
+            random_idx = np.random.choice(np.arange(0, NUM_ACTIONS_LESION))
+            final_action = lesion_actions[random_idx,:] # Only consider final action to be estimated
+            
+            ### OBTAIN OBSERVATIONS 
+
+            # Fixed from time step T - 2 : T instead of T : T+2
+            random_idx = 4
+            needle_stack = self.get_obs_wacky(random_idx, lesion_positions, max_depth)
+            plt.figure()
+            plt.imshow(np.max(needle_stack[2,:,:,:].numpy(), axis = 2) + np.max(lesion_mask, axis = 2))
+            # for lesion_idx in range(1,NUM_LESIONS+1):
+            #     lesion_positions = separate_actions(all_pos, all_obs_ids, lesion_idx-1)
+            #     lesion_actions = separate_actions(all_actions, all_ids, lesion_idx-1)
+            
+            # all_grid = torch.zeros((100,100,24))
+            # for i in range(len(lesion_actions)+1):
+            #     i = random_idx
+            #     print(lesion_positions[i, :])
+            #     all_grid += self.vol_creater.create_needle_vol_wacky(lesion_positions[i, :], max_depth)
+            # plt.figure()
+            # #plt.imshow(np.max(all_grid.numpy(), axis =2)*10 + np.max(lesion_mask, axis = 2))
+            # plt.imshow(np.max(all_grid.numpy(), axis =2)*5 + np.max(multiple_masks[::2,::2,::4], axis = 2))
+            
+            # if random_idx == 0:
+            #     #sampled_grid = np.array([np.zeros((100,100)), np.zeros((100,100)), np.array(all_grids[random_idx])])
+            #     # start array : 
+            #     needle_stack = torch.tensor(np.array([np.zeros([100,100,24]), np.zeros([100,100,24]), needle_vol[random_idx]]))
+            # elif random_idx == 1:
+            #     #sampled_grid = np.array([np.zeros((100,100)), np.array(all_grids[random_idx-1]), np.array(all_grids[random_idx])])
+            #     needle_stack = torch.tensor(np.array([np.zeros([100,100,24]), needle_vol[random_idx-1], needle_vol[random_idx]]))
+            # else:
+            #     #sampled_grid = all_grids[random_idx - 2 :random_idx+1 , :]
+            #     needle_stack = torch.tensor(np.array(needle_vol[random_idx-2 : random_idx+1]))
+                
+            # Combined grid : Contains template grid pos chosen at time steps t-3 : T
+            # Final action : Action to take from time step T 
+            final_action = torch.tensor(self._normalise_actions(final_action))#, axis = 0)
+
+            #TODO : test this!!! Additional informaiton for metrics computation 
+            downsampled_lesion_mask = lesion_mask
+            lesion_centroids = np.array(patient_file['lesion_centroids']) # lesion centroids for computing distance metric
+            action_identifier = lesion_idx 
+            #all_identifiers = np.array(patient_file['action_identifiers']) # index of lesions to visit 
+            #action_identifier = int(all_identifiers[0,random_idx])
+            tumour_centroid = lesion_centroids[action_identifier,:]
+
+            ## Obtain observation of needle volumes: 
+            obs_stack = torch.cat((torch.tensor(lesion_mask).unsqueeze(0), torch.tensor(ds_prostate_mask).unsqueeze(0), needle_stack), axis = 0)
+
+            # Obtain actions and current position at time step chosen 
+            grid_pos = all_pos[random_idx, :]
+            
+        elif self.step == 'e2e': # end to end training, sample any random index 
+
+            # Down sample for refernece 
+            lesion_mask = lesion_mask[::2,::2,::4]
+
+            # sample random index for actions and observations 
+            NUM_ACTIONS = np.shape(all_actions)[0]
+            random_idx = np.random.choice(np.arange(0, NUM_ACTIONS-1))
+
+            # Obtain action 
+            final_action = all_actions[random_idx,:] # Only consider final action to be estimated
+            final_action = torch.tensor(self._normalise_actions(final_action))#, axis = 0)
+
+            # Obtain observations from T = t-2 to T = 0 
+            
+            # # First obtain all observaitons 
+            # needle_vol = []
+            # for pos_idx in range(NUM_ACTIONS):
+            #     current_pos = all_pos[pos_idx,:]
+            #     needle_vol.append(self.vol_creater.create_needle_vol(current_pos, max_depth))
+            
+            needle_stack = self.get_obs(random_idx, all_pos, max_depth)
+            
+            downsampled_lesion_mask = lesion_mask
+            lesion_centroids = np.array(patient_file['lesion_centroids']) # lesion centroids for computing distance metric
+            action_identifier = int(all_ids[0][random_idx])
+            tumour_centroid = lesion_centroids[action_identifier,:] # moving towards l2 
+
+            ## Obtain observation of needle volumes: 
+            obs_stack = torch.cat((torch.tensor(lesion_mask).unsqueeze(0), torch.tensor(ds_prostate_mask).unsqueeze(0), needle_stack), axis = 0)
+
+            # Obtain actions and current position at time step chosen 
+            grid_pos = all_pos[random_idx, :]
+            
+        else: # l2l : sample transition 
+            
+            # sample transitions 
+            all_transitions = find_value_changes(all_ids) # find all idx where transiiton occurs 
+            transition_idx = int(np.random.choice(all_transitions))  # sample a transition
+
+            # sampled lesions 
+            l1 = int(all_ids[0][transition_idx])
+            l2 = int(all_ids[0][transition_idx+1]) 
+            action_identifier = l2 
+
+            # obtain observations
+            l1_mask = separate_masks(multiple_masks, l1+1) # add 1 as lesions are 1-indexed; 0 is background 
+            l2_mask = separate_masks(multiple_masks, l2+1)
+            lesion_mask = l1_mask + l2_mask
+            
+            # separate lesion actions and current grid positions 
+
+            # sample actions for L2 => ie want first action leading to next lesion 
+            lesion_actions = separate_actions(all_actions, all_ids, l2) # actions for l2 
+            final_action = lesion_actions[0,:]
+            final_action = torch.tensor(self._normalise_actions(final_action))#, axis = 0)
+
+            # sample observaitons for L1 : ie observaitons leading up to next action 
+            lesion_positions = separate_actions(all_pos, all_ids, l1) # observations for l1 
+            NUM_ACTIONS_LESION = np.shape(lesion_positions)[0]
+
+            needle_vol = []
+            for pos_idx in range(NUM_ACTIONS_LESION):
+                current_pos = lesion_positions[pos_idx,:]
+                needle_vol.append(self.vol_creater.create_needle_vol(current_pos, max_depth))
+
+            # Obtain needle stack from T-2, T-1 and T 
+            needle_stack = torch.tensor(np.array(needle_vol[-3:]))
+
+            #TODO : test this!!! Additional informaiton for metrics computation 
+            downsampled_lesion_mask = lesion_mask
+            lesion_centroids = np.array(patient_file['lesion_centroids']) # lesion centroids for computing distance metric
+            tumour_centroid = lesion_centroids[l2,:] # moving towards l2 
+
+            ## Obtain observation of needle volumes: 
+            obs_stack = torch.cat((torch.tensor(lesion_mask).unsqueeze(0), torch.tensor(ds_prostate_mask).unsqueeze(0), needle_stack), axis = 0)
+
+            # Obtain actions and current position at time step chosen 
+            grid_pos = lesion_positions[-1, :]
+
+        return obs_stack, final_action, downsampled_lesion_mask, action_identifier, tumour_centroid, grid_pos, max_depth 
+    
+    def get_img_mask(self, prostate_mask, tumour_mask):
+        """
+        Adds up the prostate and tumour mask together to obtain binary masks of these two objects together
+        """
+
+        prostate_vol = prostate_mask[:, :, :] #prostate = 1
+        tumour_vol = tumour_mask[:, :, :] * 2 #tumour = 2
+        combined_tumour_prostate = prostate_vol + tumour_vol
+
+        # if lesion and prostate intersection, keep us lesion label 
+        combined_tumour_prostate[combined_tumour_prostate >= 2] = 2
+
+        return combined_tumour_prostate 
+
+    def get_obs_wacky(self, random_idx, all_pos, max_depth):
+        """
+        Creates observation based on number of channels T to use 
+        
+        Uses create_vol_wacky which says x = action[0] and y = action[1]
+        whilst create_vol says x = action[1] and y = action[0]
+
+        Args:
+            random_idx (float): _description_
+            all_pos (ndarray) : all current positions for lesion 
+            max_depth (float) : max depth of prostate gland, to use for plotting volumes 
+        """
+        
+        needle_stack = torch.zeros([self.T, 100, 100, 24])
+        #random_idx = 5
+        
+        if random_idx == 0:
+            
+            # most recent needle position 
+            needle_stack[-1, :, :, :] = torch.tensor(self.vol_creater.create_needle_vol_wacky(all_pos[random_idx, :], max_depth))
+            
+            #sampled_grid = np.array([np.zeros((100,100)), np.zeros((100,100)), np.array(all_grids[random_idx])])
+            #needle_vol = self.vol_creater.create_needle_vol(all_pos[random_idx, :], max_depth)
+            #needle_stack = torch.tensor(np.array([np.zeros([100,100,24]), np.zeros([100,100,24]), needle_vol]))
+        
+        elif random_idx == 1:
+            
+            needle_stack[-1, :, :, :] = torch.tensor(self.vol_creater.create_needle_vol_wacky(all_pos[random_idx, :], max_depth))
+            needle_stack[-2, :, :, :] = torch.tensor(self.vol_creater.create_needle_vol_wacky(all_pos[random_idx-1, :], max_depth))
+            
+            #sampled_grid = np.array([np.zeros((100,100)), np.array(all_grids[random_idx-1]), np.array(all_grids[random_idx])])
+            #needle_vol_t_1 = self.vol_creater.create_needle_vol(all_pos[random_idx-1, :], max_depth)
+            #needle_vol_t0 = self.vol_creater.create_needle_vol(all_pos[random_idx, :], max_depth)
+            #needle_stack = torch.tensor(np.array([np.zeros([100,100,24]), needle_vol_t_1, needle_vol_t0]))
+        
+        else:
+            print(f"random_idx {random_idx}")
+            idx = 0 
+            for i in range((random_idx+1 - self.T), random_idx +1):
+                print(f" image idx : {i} idx : {idx} ")
+                print(f"all_pos {all_pos[i, :]}")
+                needle_stack[idx, :,:,:] = torch.tensor(self.vol_creater.create_needle_vol_wacky(all_pos[i, :], max_depth))
+                idx += 1
+            
+            #needle_vol_t_2 = self.vol_creater.create_needle_vol(all_pos[random_idx-2, :], max_depth)
+            #needle_vol_t_1 = self.vol_creater.create_needle_vol(all_pos[random_idx-1, :], max_depth)
+            #needle_vol_t0 = self.vol_creater.create_needle_vol(all_pos[random_idx, :], max_depth)
+            #needle_stack = torch.tensor([needle_vol_t_2, needle_vol_t_1, needle_vol_t0])
+        
+        return needle_stack 
+
+    def get_obs(self, random_idx, all_pos, max_depth):
+        """
+        Creates observation based on number of channels T to use 
+
+        Args:
+            random_idx (float): _description_
+            all_pos (ndarray) : all current positions for lesion 
+            max_depth (float) : max depth of prostate gland, to use for plotting volumes 
+        """
+        
+        needle_stack = torch.zeros([self.T, 100, 100, 24])
+        #random_idx = 5
+        
+        if random_idx == 0:
+            
+            # most recent needle position 
+            needle_stack[-1, :, :, :] = torch.tensor(self.vol_creater.create_needle_vol(all_pos[random_idx, :], max_depth))
+            
+            #sampled_grid = np.array([np.zeros((100,100)), np.zeros((100,100)), np.array(all_grids[random_idx])])
+            #needle_vol = self.vol_creater.create_needle_vol(all_pos[random_idx, :], max_depth)
+            #needle_stack = torch.tensor(np.array([np.zeros([100,100,24]), np.zeros([100,100,24]), needle_vol]))
+        
+        elif random_idx == 1:
+            
+            needle_stack[-1, :, :, :] = torch.tensor(self.vol_creater.create_needle_vol(all_pos[random_idx, :], max_depth))
+            needle_stack[-2, :, :, :] = torch.tensor(self.vol_creater.create_needle_vol(all_pos[random_idx-1, :], max_depth))
+            
+            #sampled_grid = np.array([np.zeros((100,100)), np.array(all_grids[random_idx-1]), np.array(all_grids[random_idx])])
+            #needle_vol_t_1 = self.vol_creater.create_needle_vol(all_pos[random_idx-1, :], max_depth)
+            #needle_vol_t0 = self.vol_creater.create_needle_vol(all_pos[random_idx, :], max_depth)
+            #needle_stack = torch.tensor(np.array([np.zeros([100,100,24]), needle_vol_t_1, needle_vol_t0]))
+        
+        else:
+            
+            idx = 0 
+            for i in range((random_idx+1 - self.T), random_idx +1):
+                print(f" image idx : {i} idx : {idx} ")
+                needle_stack[idx, :,:,:] = torch.tensor(self.vol_creater.create_needle_vol(all_pos[i, :], max_depth))
+                idx += 1
+            
+            #needle_vol_t_2 = self.vol_creater.create_needle_vol(all_pos[random_idx-2, :], max_depth)
+            #needle_vol_t_1 = self.vol_creater.create_needle_vol(all_pos[random_idx-1, :], max_depth)
+            #needle_vol_t0 = self.vol_creater.create_needle_vol(all_pos[random_idx, :], max_depth)
+            #needle_stack = torch.tensor([needle_vol_t_2, needle_vol_t_1, needle_vol_t0])
+        
+        return needle_stack 
+     
 class TimeStep_data_debug(Dataset):
     """
     Debugging dataloader : always returns the same action [1 0 0] ie always going in a horizontal striaghtg line -> 
@@ -1233,7 +1744,6 @@ class TimeStep_data_debug(Dataset):
         """
         A function that converts an image volume from np.float64 to uint8 
         between 0 to 255
-
         """
 
         max_img = np.max(img)
@@ -2650,6 +3160,7 @@ if __name__ =='__main__':
     # also the same as labels for e2e ie end to end, sequential timesteps from start to end of policy
     LABELS_PATH_L2L = '/Users/ianijirahmae/ImitationLearning/NEW_ACTION_OBS_LABELS.h5'
     
+    LABELS_PATH_WACKY = '/Users/ianijirahmae/ImitationLearning/ACTION_OBS_LABELS_WACKY.h5'
     # LABEL PATH IF JUST DOING E2E TRAINING ONLY 
     #LABELS_PATH_ALL = '/Users/ianijirahmae/Documents/PhD_project/Biopsy_RL/action_labels.h5'
 
@@ -2742,6 +3253,8 @@ if __name__ =='__main__':
         
         if (data_mode == 'l2l') or (data_mode == 'e2e'):
             LABELS_PATH = LABELS_PATH_L2L #ACTION_OBS_LABELS.H5 doesnt have multiple_lesion_img
+        elif (data_mode == 'wacky'):
+            LABELS_PATH = LABELS_PATH_WACKY
         else: #c2l or n2n
             LABELS_PATH = LABELS_PATH_C2L 
 
@@ -2750,8 +3263,8 @@ if __name__ =='__main__':
         #val_ds = TimeStep_data_new(PS_PATH, CSV_PATH, LABELS_PATH, mode = 'val')
         
         # Dataset for sub-samples of data : c2l, n2n, l2l, e2e 
-        train_ds = TimeStep_data_steps(PS_PATH, CSV_PATH, LABELS_PATH, mode = 'train', step = args.data_mode, single_patient = args.single_patient)
-        val_ds = TimeStep_data_steps(PS_PATH, CSV_PATH, LABELS_PATH, mode = 'val', step = args.data_mode)
+        train_ds = TimeStep_data_steps_pt1(PS_PATH, CSV_PATH, LABELS_PATH, mode = 'train', step = args.data_mode, single_patient = args.single_patient, T = 3)
+        val_ds = TimeStep_data_steps_pt1(PS_PATH, CSV_PATH, LABELS_PATH, mode = 'val', step = args.data_mode, T = 3)
     
         train_dl = DataLoader(train_ds, batch_size = 32, shuffle = True)
         val_dl = DataLoader(val_ds, batch_size = 8, shuffle = False)

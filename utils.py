@@ -291,8 +291,13 @@ class Image_dataloader(Dataset):
         # Obtain list of patient names with multiple lesions -> change to path name
         #df_dataset = pd.read_csv('./patient_data_multiple_lesions.csv')
         df_dataset = pd.read_csv(csv_path)
-        #self.all_file_names = df_dataset['patient_name'].tolist()
-        #self.num_lesions = df_dataset[' num_lesions'].tolist()
+        #Filter out patients >=5 lesions 
+        patients_w5 = np.where(df_dataset[' num_lesions'] >= 5)[0] # save these indices for next time!!!
+    
+        # Remove patients where lesions >5 as these are incorrectly labelled!!
+        df_dataset = df_dataset.drop(df_dataset.index[patients_w5])
+        self.all_file_names = df_dataset['patient_name'].tolist()
+        self.num_lesions = df_dataset[' num_lesions'].tolist()
 
         # Train with all patients 
         if use_all:
