@@ -141,6 +141,9 @@ class GridTransform(SpatialTransform):
                 print("Yet implemented.")
             case "b-spline":
                 print("Yet implemented.")
+            case "t-conv":
+                self.ddf = self.transpose_conv_upsampling()
+
 
     @staticmethod
     def linear_interpolation(volumes, coords):
@@ -151,6 +154,23 @@ class GridTransform(SpatialTransform):
             padding_mode="zeros",
             align_corners=True,
         ).permute(0, 2, 3, 4, 1)  # back to (batch,y,x,z,yxz)
+    
+    def transpose_conv_upsampling(self, sigma_voxel=[1,1,1]):
+        voxdims = [2/(v-1) for v in self.volsize]
+        grid_dims = [2/(u-1) for u in self.grid_size]
+        tails = [int(sigma_voxel[d]*3) for d in [0,1,2]]
+        gauss_pdf = lambda x, sigma: 2.71828**(-0.5*x**2/sigma**2)
+        kernels_1d = [torch.tensor([gauss_pdf(x,sigma_voxel[d]) for x in range(-tails[d], tails[d]+1)],device=self.device) for d in [0,1,2]]
+        strides = [int(grid_dims[d]/voxdims[d]) for d in [0,1,2]]
+
+        return torch.nn.functional.conv_transpose3d(
+            torch.nn.functional.conv_transpose3d(
+            torch.nn.functional.conv_transpose3d(
+            input=self.control_point_displacements.permute(0, 4, 1, 2, 3),
+            weight = kernels_1d[1].reshape(1,1,-1,1,1).expand(3,3,-1,-1,-1),  stride = (strides[1],1,1)
+        ), weight = kernels_1d[0].reshape(1,1,1,-1,1).expand(3,3,-1,-1,-1),  stride = (1,strides[0],1)
+        ), weight = kernels_1d[2].reshape(1,1,1,1,-1).expand(3,3,-1,-1,-1),  stride = (1,1,strides[2])
+        )
     
     def evaluate_gaussian_spline(self):
         """
