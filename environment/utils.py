@@ -17,9 +17,9 @@ class SpatialTransform:
         self.voxel_coords = (
             torch.stack(
                 torch.meshgrid(
-                    torch.linspace(-1, 1, volsize[1]),
-                    torch.linspace(-1, 1, volsize[0]),
-                    torch.linspace(-1, 1, volsize[2]),
+                    torch.linspace(-1, 1, self.volsize[1]),
+                    torch.linspace(-1, 1, self.volsize[0]),
+                    torch.linspace(-1, 1, self.volsize[2]),
                     indexing="ij",
                 ),
                 dim=3,
@@ -42,11 +42,12 @@ class SpatialTransform:
         )
 
 
+#TODO
 class GlobalAffine(SpatialTransform):
     def __init__(self):
         super().__init__()
 
-
+#TODO
 class LocalAffine(SpatialTransform):
     def __init__(self):
         super().__init__()
@@ -63,9 +64,9 @@ class GridTransform(SpatialTransform):
         self.control_point_coords = (
             torch.stack(
                 torch.meshgrid(
-                    torch.linspace(-1, 1, grid_size[1]),
-                    torch.linspace(-1, 1, grid_size[0]),
-                    torch.linspace(-1, 1, grid_size[2]),
+                    torch.linspace(-1, 1, self.grid_size[1]),
+                    torch.linspace(-1, 1, self.grid_size[0]),
+                    torch.linspace(-1, 1, self.grid_size[2]),
                     indexing="ij",
                 ),
                 dim=3,
@@ -76,6 +77,21 @@ class GridTransform(SpatialTransform):
         self.grid_dims = [2 / (self.grid_size[i] - 1) for i in [0, 1, 2]]  # (x,y,z)
 
         self.control_point_displacements = torch.zeros_like(self.control_point_coords)
+
+        # pre-compute for spline kernels
+        if self.interp_type == "g-spline":  
+            num_control_points = self.grid_size[0]*self.grid_size[1]*self.grid_size[2]
+            num_voxels = self.volsize[0]*self.volsize[1]*self.volsize[2]
+            """ computing all distance is not efficient
+            d_p2c = self.control_point_coords.reshape(
+                self.batch_size,-1,1,3).repeat_interleave(repeats=num_voxels,dim=2) 
+            - self.voxel_coords.reshape(
+                self.batch_size,1,-1,3).repeat_interleave(repeats=num_control_points,dim=1)  # voxel-to-control distances
+            self.control_to_voxel_weight = d_p2c.sum(dim=-1)*(-1)/sigma
+            # normalise here
+            """
+            self.control_to_voxel_weights = torch.ones(self.batch_size,num_control_points,num_voxels).to(self.device)
+
 
     def generate_random_transform(self, rate=0.25, scale=0.1):
         """
@@ -121,6 +137,7 @@ class GridTransform(SpatialTransform):
                     self.control_point_displacements, self.voxel_coords
                 )
             case "g-spline_gauss":
+                # self.evaluate_gaussian_spline()
                 print("Yet implemented.")
             case "b-spline":
                 print("Yet implemented.")
@@ -134,3 +151,12 @@ class GridTransform(SpatialTransform):
             padding_mode="zeros",
             align_corners=True,
         ).permute(0, 2, 3, 4, 1)  # back to (batch,y,x,z,yxz)
+    
+    def evaluate_gaussian_spline(self):
+        """
+        # compute all voxel-to-control distances
+        # compute the weights using gaussian kernel
+        # compute ddf
+        """
+        for d in [0,1,2]:
+            self.ddf[...,d] = torch.matmul(self.control_point_displacements[...,d], self.control_to_voxel_weights)
