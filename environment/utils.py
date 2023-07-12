@@ -97,6 +97,28 @@ class GridTransform(SpatialTransform):
                 self.batch_size, num_control_points, num_voxels
             ).to(self.device)
 
+        elif self.interp_type == "t-conv":
+            sigma_voxel = [1, 1, 1]
+            voxdims = [2 / (v - 1) for v in self.volsize]
+            grid_dims = [2 / (u - 1) for u in self.grid_size]
+            self.strides = [int(grid_dims[d] / voxdims[d]) for d in [0, 1, 2]]
+            # make sure tails are odd numbers that can be used for centre-aligning padding
+            self.tails = [int(sigma_voxel[d] * 3) for d in [0, 1, 2]]
+            gauss_pdf = lambda x, sigma: 2.71828 ** (-0.5 * x**2 / sigma**2)
+            kernels_1d = [
+                torch.tensor(
+                    [
+                        gauss_pdf(x, sigma_voxel[d])
+                        for x in range(-tails[d], tails[d] + 1)
+                    ],
+                    device=self.device,
+                )
+                for d in [0, 1, 2]
+            ]
+            # N.B normalising by sum does not preserve control point displacements
+            # TODO: normalising using control point displacement for displacement-preserving alternative
+            self.kernels_1d = [k / k.sum() for k in kernels_1d]
+
     def generate_random_transform(self, rate=0.25, scale=0.1):
         """
         Generate random displacements on control points dcp (uniform distribution)
@@ -137,9 +159,7 @@ class GridTransform(SpatialTransform):
         """
         match self.interp_type:
             case "linear":
-                self.ddf = self.linear_interpolation(
-                    self.control_point_displacements, self.voxel_coords
-                )
+                self.ddf = self.linear_interpolation()
             case "g-spline_gauss":
                 # self.evaluate_gaussian_spline()
                 print("Yet implemented.")
@@ -148,60 +168,46 @@ class GridTransform(SpatialTransform):
             case "t-conv":
                 self.ddf = self.transpose_conv_upsampling()
 
-    @staticmethod
-    def linear_interpolation(volumes, coords):
+    def linear_interpolation(self):
+        """
+        input: permute to (batch,c,y,x,z), c=yxz
+        grid: (batch,y,x,z,yxz)
+
+        Return ddf: permute back to (batch,y,x,z,yxz)
+        """
         return torch.nn.functional.grid_sample(
-            input=volumes.permute(0, 4, 1, 2, 3),  # permute to (batch,c,y,x,z), c=yxz
-            grid=coords,  # (batch,y,x,z,yxz)
+            input=self.control_point_displacements.permute(0, 4, 1, 2, 3),
+            grid=self.voxel_coords,
             mode="bilinear",
             padding_mode="zeros",
             align_corners=True,
-        ).permute(
-            0, 2, 3, 4, 1
-        )  # back to (batch,y,x,z,yxz)
+        ).permute(0, 2, 3, 4, 1)
 
-    def transpose_conv_upsampling(self, sigma_voxel=[1, 1, 1]):
+    def transpose_conv_upsampling(self):
         """
         Using transpose convolution to approximate Gaussian spline transformation
         :param sigma_voxel: (x,y,z) Gaussian spline parameter sigma in voxel (the larger sigma the smoother transformation)
         """
-        voxdims = [2 / (v - 1) for v in self.volsize]
-        grid_dims = [2 / (u - 1) for u in self.grid_size]
-        gauss_pdf = lambda x, sigma: 2.71828 ** (-0.5 * x**2 / sigma**2)
-        strides = [int(grid_dims[d] / voxdims[d]) for d in [0, 1, 2]]
-
-        # make sure tails are odd numbers that can be used for centre-aligning padding
-        tails = [int(sigma_voxel[d] * 3) for d in [0, 1, 2]]
-        kernels_1d = [
-            torch.tensor(
-                [gauss_pdf(x, sigma_voxel[d]) for x in range(-tails[d], tails[d] + 1)],
-                device=self.device,
-            )
-            for d in [0, 1, 2]
-        ]  
-
-        # N.B normalising by sum does not preserve control point displacements
-        # TODO: normalising using control point displacement for displacement-preserving alternative
-        kernels_1d = [k / k.sum() for k in kernels_1d]
-
         # padding so centres are aligned
         ddf = torch.nn.functional.conv_transpose3d(
             torch.nn.functional.conv_transpose3d(
                 torch.nn.functional.conv_transpose3d(
                     input=self.control_point_displacements.permute(0, 4, 1, 2, 3),
-                    weight=kernels_1d[1]
+                    weight=self.kernels_1d[1]
                     .reshape(1, 1, -1, 1, 1)
                     .expand(3, 3, -1, -1, -1),
-                    stride=(strides[1], 1, 1),
-                    padding=(tails[1], 0, 0),  
+                    stride=(self.strides[1], 1, 1),
+                    padding=(self.tails[1], 0, 0),
                 ),
-                weight=kernels_1d[0].reshape(1, 1, 1, -1, 1).expand(3, 3, -1, -1, -1),
-                stride=(1, strides[0], 1),
-                padding=(0, tails[0], 0),
+                weight=self.kernels_1d[0]
+                .reshape(1, 1, 1, -1, 1)
+                .expand(3, 3, -1, -1, -1),
+                stride=(1, self.strides[0], 1),
+                padding=(0, self.tails[0], 0),
             ),
-            weight=kernels_1d[2].reshape(1, 1, 1, 1, -1).expand(3, 3, -1, -1, -1),
-            stride=(1, 1, strides[2]),
-            padding=(0, 0, tails[2]),
+            weight=self.kernels_1d[2].reshape(1, 1, 1, 1, -1).expand(3, 3, -1, -1, -1),
+            stride=(1, 1, self.strides[2]),
+            padding=(0, 0, self.tails[2]),
         )
         ddf = torch.nn.functional.grid_sample(
             input=ddf,  # (batch,yxz,y,x,z)

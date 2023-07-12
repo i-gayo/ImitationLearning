@@ -1,5 +1,7 @@
 import torch
 
+from environment.utils import GridTransform
+
 
 ## main env classes
 class TPBEnv:
@@ -37,11 +39,11 @@ class TPBEnv:
 class LabelledImageWorld:
     # TODO: Base class for other world data
     def __init__(self, gland: torch.Tensor, target: torch.Tensor, voxdims: list):
-        '''
+        """
         gland: (y,x,z) volume
         target: (y,x,z) volume
         voxdims: (x,y,z) voxel dimensions mm/unit
-        '''
+        """
         INITIAL_OBSERVE_LOCATION = "random"  # ("random", "centre")
         INITIAL_OBSERVE_RANGE = 0.3
 
@@ -51,7 +53,7 @@ class LabelledImageWorld:
         self.target = target
         self.voxdims = voxdims  # x-y-z order
         self.batch_size = self.gland.shape[0]  # x-y-z order
-        self.vol_size = [self.gland.shape[i] for i in [3,2,4]]
+        self.vol_size = [self.gland.shape[i] for i in [3, 2, 4]]
 
         # - The normalised image coordinate system, per torch convention [-1, 1]
         # - The physical image coordinate system, in mm centred at the image centre
@@ -279,9 +281,7 @@ class NeedleGuide:
                         ),
                         dim=3,
                     ).to(device)
-                    + self.grid_centre[n].reshape(
-                        1, 1, 1, 3
-                    )  
+                    + self.grid_centre[n].reshape(1, 1, 1, 3)
                     for n in range(batch_size)
                 ],
                 dim=0,
@@ -384,21 +384,28 @@ class DeformationTransition:
     def __init__(self, world):
         """
         A transition function
-        Random - no action affected the world transition
+        Random deformation only, i.e. no action affected the world transition
         """
-        FFD_GRID_SIZE = 50
-        """
-        self.ffd_ctrl_pts = torch.meshgrid(
-            torch.linspace(),
-            torch.linspace(),
-            torch.linspace(),
+        FFD_GRID_SIZE = [8, 8, 4]
+
+        self.ffd_grid_size = FFD_GRID_SIZE
+        self.random_transform = GridTransform(
+            grid_size=self.ffd_grid_size,
+            interp_type="linear",
+            volsize=world.volsize,
+            batch_size=world.batch_size,
+            device=world.device,
         )
-        """
 
     def update(self, world, action):
-        ## update the world
-        # TODO: deform the volume
-        return 0
+        self.random_transform.generate_random_transform()
+        transformed_volume = self.random_transform.warp(
+            torch.concat([world.gland, world.target], dim=1).type(torch.float32)
+        )
+        world.gland, world.target = (
+            transformed_volume[:, 0, ...],
+            transformed_volume[:, 1, ...],
+        )
 
 
 ## observation classes
