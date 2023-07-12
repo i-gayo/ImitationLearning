@@ -24,7 +24,7 @@ class SpatialTransform:
                 ),
                 dim=3,
             )[None, ...]
-            .repeat_interleave(dim=0, repeats=self.batch_size)
+            .expand(self.batch_size,-1,-1,-1,-1)
             .to(self.device)
         )
 
@@ -42,12 +42,13 @@ class SpatialTransform:
         )
 
 
-#TODO
+# TODO
 class GlobalAffine(SpatialTransform):
     def __init__(self):
         super().__init__()
 
-#TODO
+
+# TODO
 class LocalAffine(SpatialTransform):
     def __init__(self):
         super().__init__()
@@ -71,7 +72,7 @@ class GridTransform(SpatialTransform):
                 ),
                 dim=3,
             )[None, ...]
-            .repeat_interleave(dim=0, repeats=self.batch_size)
+            .expand(self.batch_size,-1,-1,-1,-1)
             .to(self.device)
         )
         self.grid_dims = [2 / (self.grid_size[i] - 1) for i in [0, 1, 2]]  # (x,y,z)
@@ -79,19 +80,22 @@ class GridTransform(SpatialTransform):
         self.control_point_displacements = torch.zeros_like(self.control_point_coords)
 
         # pre-compute for spline kernels
-        if self.interp_type == "g-spline":  
-            num_control_points = self.grid_size[0]*self.grid_size[1]*self.grid_size[2]
-            num_voxels = self.volsize[0]*self.volsize[1]*self.volsize[2]
+        if self.interp_type == "g-spline":
+            num_control_points = (
+                self.grid_size[0] * self.grid_size[1] * self.grid_size[2]
+            )
+            num_voxels = self.volsize[0] * self.volsize[1] * self.volsize[2]
             """ computing all distance is not efficient
             d_p2c = self.control_point_coords.reshape(
-                self.batch_size,-1,1,3).repeat_interleave(repeats=num_voxels,dim=2) 
+                self.batch_size,-1,1,3).expand(-1,-1,num_voxels,3)
             - self.voxel_coords.reshape(
-                self.batch_size,1,-1,3).repeat_interleave(repeats=num_control_points,dim=1)  # voxel-to-control distances
+                self.batch_size,1,-1,3).expand(-1,num_control_points,-1,3)  # voxel-to-control distances
             self.control_to_voxel_weight = d_p2c.sum(dim=-1)*(-1)/sigma
             # normalise here
             """
-            self.control_to_voxel_weights = torch.ones(self.batch_size,num_control_points,num_voxels).to(self.device)
-
+            self.control_to_voxel_weights = torch.ones(
+                self.batch_size, num_control_points, num_voxels
+            ).to(self.device)
 
     def generate_random_transform(self, rate=0.25, scale=0.1):
         """
@@ -123,7 +127,7 @@ class GridTransform(SpatialTransform):
                     ]
                 )
                 < rate
-            )[..., None].repeat_interleave(dim=4, repeats=3)
+            )[..., None].expand(-1,-1,-1,-1,3)
         ).to(self.device)
 
     def compute_ddf(self):
@@ -144,7 +148,6 @@ class GridTransform(SpatialTransform):
             case "t-conv":
                 self.ddf = self.transpose_conv_upsampling()
 
-
     @staticmethod
     def linear_interpolation(volumes, coords):
         return torch.nn.functional.grid_sample(
@@ -153,30 +156,59 @@ class GridTransform(SpatialTransform):
             mode="bilinear",
             padding_mode="zeros",
             align_corners=True,
-        ).permute(0, 2, 3, 4, 1)  # back to (batch,y,x,z,yxz)
-    
-    def transpose_conv_upsampling(self, sigma_voxel=[1,1,1]):
-        voxdims = [2/(v-1) for v in self.volsize]
-        grid_dims = [2/(u-1) for u in self.grid_size]
-        tails = [int(sigma_voxel[d]*3) for d in [0,1,2]]
-        gauss_pdf = lambda x, sigma: 2.71828**(-0.5*x**2/sigma**2)
-        kernels_1d = [torch.tensor([gauss_pdf(x,sigma_voxel[d]) for x in range(-tails[d], tails[d]+1)],device=self.device) for d in [0,1,2]]
-        strides = [int(grid_dims[d]/voxdims[d]) for d in [0,1,2]]
+        ).permute(
+            0, 2, 3, 4, 1
+        )  # back to (batch,y,x,z,yxz)
 
-        return torch.nn.functional.conv_transpose3d(
+    def transpose_conv_upsampling(self, sigma_voxel=[1, 1, 1]):
+        voxdims = [2 / (v - 1) for v in self.volsize]
+        grid_dims = [2 / (u - 1) for u in self.grid_size]
+        tails = [int(sigma_voxel[d] * 3) for d in [0, 1, 2]]
+        gauss_pdf = lambda x, sigma: 2.71828 ** (-0.5 * x**2 / sigma**2)
+        kernels_1d = [
+            torch.tensor(
+                [gauss_pdf(x, sigma_voxel[d]) for x in range(-tails[d], tails[d] + 1)],
+                device=self.device,
+            )
+            for d in [0, 1, 2]
+        ] # make sure tails are odd numbers that can be used for padding
+        #N.B normalising by sum does not preserve control point displacement
+        #TODO: normalising using control point displacement for displacement-preserving alternative
+        kernels_1d = [k/k.sum() for k in kernels_1d]  
+        strides = [int(grid_dims[d] / voxdims[d]) for d in [0, 1, 2]]
+
+        ddf = torch.nn.functional.conv_transpose3d(
             torch.nn.functional.conv_transpose3d(
-            torch.nn.functional.conv_transpose3d(
-            input=self.control_point_displacements.permute(0, 4, 1, 2, 3),
-            weight = kernels_1d[1].reshape(1,1,-1,1,1).expand(3,3,-1,-1,-1),  stride = (strides[1],1,1)
-        ), weight = kernels_1d[0].reshape(1,1,1,-1,1).expand(3,3,-1,-1,-1),  stride = (1,strides[0],1)
-        ), weight = kernels_1d[2].reshape(1,1,1,1,-1).expand(3,3,-1,-1,-1),  stride = (1,1,strides[2])
+                torch.nn.functional.conv_transpose3d(
+                    input=self.control_point_displacements.permute(0, 4, 1, 2, 3),
+                    weight=kernels_1d[1].reshape(1, 1, -1, 1, 1).expand(3, 3, -1, -1, -1),
+                    stride=(strides[1], 1, 1),
+                    padding=(tails[1],0,0)  # padding so centre aligned
+                ),
+                weight=kernels_1d[0].reshape(1, 1, 1, -1, 1).expand(3, 3, -1, -1, -1),
+                stride=(1, strides[0], 1),
+                padding=(0,tails[0],0)
+            ),
+            weight=kernels_1d[2].reshape(1, 1, 1, 1, -1).expand(3, 3, -1, -1, -1),
+            stride=(1, 1, strides[2]),
+            padding=(0,0,tails[2])
         )
-    
+        ddf = torch.nn.functional.grid_sample(
+            input=ddf,  # (batch,yxz,y,x,z)
+            grid=self.voxel_coords,  # (batch,y,x,z,yxz)
+            mode="bilinear",
+            padding_mode="zeros",
+            align_corners=True,
+        )
+        return ddf.permute(0, 2, 3, 4, 1)  # back to (batch,y,x,z,yxz)
+
     def evaluate_gaussian_spline(self):
         """
         # compute all voxel-to-control distances
         # compute the weights using gaussian kernel
         # compute ddf
         """
-        for d in [0,1,2]:
-            self.ddf[...,d] = torch.matmul(self.control_point_displacements[...,d], self.control_to_voxel_weights)
+        for d in [0, 1, 2]:
+            self.ddf[..., d] = torch.matmul(
+                self.control_point_displacements[..., d], self.control_to_voxel_weights
+            )
