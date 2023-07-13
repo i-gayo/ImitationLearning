@@ -392,7 +392,7 @@ class DeformationTransition:
         self.random_transform = GridTransform(
             grid_size=self.ffd_grid_size,
             interp_type="linear",
-            volsize=world.volsize,
+            volsize=[world.gland.shape[i] for i in [3,2,4]],
             batch_size=world.batch_size,
             device=world.device,
         )
