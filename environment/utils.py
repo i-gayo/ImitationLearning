@@ -97,19 +97,19 @@ class GridTransform(SpatialTransform):
                 self.batch_size, num_control_points, num_voxels
             ).to(self.device)
 
-        elif self.interp_type == "t-conv":
-            sigma_voxel = [1, 1, 1]
+        elif self.interp_type == "t-conv": 
+            sigma_voxel = [1, 1, 1]  #:param sigma_voxel: (x,y,z) Gaussian spline parameter sigma in voxel (the larger sigma the smoother transformation)
             voxdims = [2 / (v - 1) for v in self.volsize]
             grid_dims = [2 / (u - 1) for u in self.grid_size]
             self.strides = [int(grid_dims[d] / voxdims[d]) for d in [0, 1, 2]]
             # make sure tails are odd numbers that can be used for centre-aligning padding
             self.tails = [int(sigma_voxel[d] * 3) for d in [0, 1, 2]]
             gauss_pdf = lambda x, sigma: 2.71828 ** (-0.5 * x**2 / sigma**2)
-            kernels_1d = [
+            self.kernels_1d = [
                 torch.tensor(
                     [
                         gauss_pdf(x, sigma_voxel[d])
-                        for x in range(-tails[d], tails[d] + 1)
+                        for x in range(-self.tails[d], self.tails[d] + 1)
                     ],
                     device=self.device,
                 )
@@ -117,7 +117,7 @@ class GridTransform(SpatialTransform):
             ]
             # N.B normalising by sum does not preserve control point displacements
             # TODO: normalising using control point displacement for displacement-preserving alternative
-            self.kernels_1d = [k / k.sum() for k in kernels_1d]
+            self.kernels_1d = [k / k.sum() for k in self.kernels_1d]
 
     def generate_random_transform(self, rate=0.25, scale=0.1):
         """
@@ -186,7 +186,6 @@ class GridTransform(SpatialTransform):
     def transpose_conv_upsampling(self):
         """
         Using transpose convolution to approximate Gaussian spline transformation
-        :param sigma_voxel: (x,y,z) Gaussian spline parameter sigma in voxel (the larger sigma the smoother transformation)
         """
         # padding so centres are aligned
         ddf = torch.nn.functional.conv_transpose3d(
