@@ -404,14 +404,14 @@ class DeformationTransition:
             device=world.device,
         )
 
-    def update(self, world, action):
+    def update(self, world, action, threshold=0.45):
         self.random_transform.generate_random_transform()
         transformed_volume = self.random_transform.warp(
             torch.concat([world.gland, world.target], dim=1).type(torch.float32)
-        )
+        ) >= threshold
         world.gland, world.target = (
-            transformed_volume[:, 0, ...],
-            transformed_volume[:, 1, ...],
+            transformed_volume[:, [0], ...],
+            transformed_volume[:, [1], ...],
         )
 
 

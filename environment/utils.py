@@ -97,8 +97,12 @@ class GridTransform(SpatialTransform):
                 self.batch_size, num_control_points, num_voxels
             ).to(self.device)
 
-        elif self.interp_type == "t-conv": 
-            sigma_voxel = [1, 1, 1]  #:param sigma_voxel: (x,y,z) Gaussian spline parameter sigma in voxel (the larger sigma the smoother transformation)
+        elif self.interp_type == "t-conv":
+            sigma_voxel = [
+                1,
+                1,
+                1,
+            ]  #:param sigma_voxel: (x,y,z) Gaussian spline parameter sigma in voxel (the larger sigma the smoother transformation)
             voxdims = [2 / (v - 1) for v in self.volsize]
             grid_dims = [2 / (u - 1) for u in self.grid_size]
             self.strides = [int(grid_dims[d] / voxdims[d]) for d in [0, 1, 2]]
