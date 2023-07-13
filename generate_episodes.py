@@ -39,6 +39,8 @@ def main():
             voxdims=[voxdims.tolist()] * num_t,
         )  # create a predefined biopsy environment
 
+        tpb_envs.run()
+
         #TODO: save episodes to files
 
 

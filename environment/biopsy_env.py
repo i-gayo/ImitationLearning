@@ -114,20 +114,13 @@ class LabelledImageWorld:
             dim=0,
         ).to(self.device)
 
-    def get_gland_coordinates(self):
-        return self.reference_grid_mm[
-            self.gland.squeeze(dim=1)[..., None].repeat_interleave(dim=4, repeats=3)
-        ].reshape((self.batch_size, -1, 3))
-        """debug
-        from PIL import Image
-        im = Image.fromarray((world.gland.squeeze()[...,None].repeat_interleave(dim=4,repeats=3))[0,40,:,:,0].cpu().numpy())
-        im.save("test.jpeg")
-        """
-
-    def get_target_coordinates(self):
-        return self.reference_grid_mm[
-            self.target.squeeze(dim=1)[..., None].repeat_interleave(dim=4, repeats=3)
-        ].reshape((self.batch_size, -1, 3))
+    def get_mask_coordinates(self, mask):
+        # mask: (b,1,y,x,z)
+        # return a list of coordinates
+        return [
+            self.reference_grid_mm[b, mask.squeeze(dim=1)[b, ...], :]
+            for b in range(self.batch_size)
+        ]
 
     def get_reference_slice_axial(self, norm=True):
         reference_slice_axial = torch.stack(
@@ -223,13 +216,24 @@ class NeedleGuide:
         self.num_needle_samples = NUM_NEEDLE_SAMPLES
 
         ## align brachytherapy template (13x13 5mm apart)
-        gland_coordinates = world.get_gland_coordinates()
+        gland_coordinates = world.get_mask_coordinates(world.gland)
         if GRID_CENTRE == "centroid":
-            self.grid_centre = gland_coordinates.mean(dim=1)
+            self.grid_centre = torch.stack(
+                [gland_coordinates[b].mean(dim=0) for b in range(world.batch_size)],
+                dim=0,
+            )
         elif GRID_CENTRE == "bbox":
-            self.grid_centre = (
-                gland_coordinates.max(dim=1)[0] + gland_coordinates.min(dim=1)[0]
-            ) / 2
+            self.grid_centre = torch.stack(
+                [
+                    (
+                        gland_coordinates[b].max(dim=0)[0]
+                        + gland_coordinates[b].min(dim=0)[0]
+                    )
+                    / 2
+                    for b in range(world.batch_size)
+                ],
+                dim=0,
+            )
 
         ## initialise sampling
         #  a list of NUM_NEEDLE_DEPTHS (batch,13,13,NUM_NEEDLE_SAMPLES,3)
@@ -320,8 +324,11 @@ class NeedleGuide:
              - if true, update sample_x, y, z, with nearest centre or largest CCL
             """
 
-            target_coordinates = world.get_target_coordinates()
-            self.target_centre = target_coordinates.mean(dim=1)  # current lesion centre
+            target_coordinates = world.get_mask_coordinates(world.target)
+            self.target_centre = torch.stack(
+                [target_coordinates[b].mean(dim=0) for b in range(world.batch_size)],
+                dim=0,
+            )
 
             # if three_class: observe_update = ((self.target_centre-world.observe_mm) / (self.observe_stepsize*2)).round().sign()
             # self.observe_update = torch.nn.functional.one_hot((observe_update+1).type(torch.int64),num_classes=3)
@@ -392,7 +399,7 @@ class DeformationTransition:
         self.random_transform = GridTransform(
             grid_size=self.ffd_grid_size,
             interp_type="linear",
-            volsize=[world.gland.shape[i] for i in [3,2,4]],
+            volsize=[world.gland.shape[i] for i in [3, 2, 4]],
             batch_size=world.batch_size,
             device=world.device,
         )
