@@ -26,7 +26,9 @@ class SpatialTransform:
             )[None, ...]
             .expand(self.batch_size, -1, -1, -1, -1)
             .to(self.device)
-        )[...,[2,1,0]]  # ijk -> xyz
+        )[
+            ..., [2, 1, 0]
+        ]  # ijk -> xyz
 
         return 0
 
@@ -37,7 +39,7 @@ class SpatialTransform:
         self.compute_ddf()  # child class function
         return torch.nn.functional.grid_sample(
             vol,
-            self.ddf + self.voxel_coords, 
+            self.ddf + self.voxel_coords,
             mode="bilinear",
             padding_mode="zeros",
             align_corners=True,
@@ -76,7 +78,9 @@ class GridTransform(SpatialTransform):
             )[None, ...]
             .expand(self.batch_size, -1, -1, -1, -1)
             .to(self.device)
-        )[...,[2,1,0]]  # ijk -> xyz
+        )[
+            ..., [2, 1, 0]
+        ]  # ijk -> xyz
         self.grid_dims = [2 / (self.grid_size[i] - 1) for i in [0, 1, 2]]  # (x,y,z)
 
         self.control_point_displacements = torch.zeros_like(self.control_point_coords)
@@ -132,18 +136,20 @@ class GridTransform(SpatialTransform):
         :param scale: [0,1] scale of unit grid size the random displacement
         """
         self.control_point_displacements = (
-            (torch.rand(
-                [
-                    self.batch_size,
-                    self.grid_size[2],
-                    self.grid_size[1],
-                    self.grid_size[0],
-                    3,
-                ]
-            )*2-1)
-            * torch.tensor([self.grid_dims[i] for i in [2, 1, 0]]).view(
-                1, 1, 1, 1, 3
+            (
+                torch.rand(
+                    [
+                        self.batch_size,
+                        self.grid_size[2],
+                        self.grid_size[1],
+                        self.grid_size[0],
+                        3,
+                    ]
+                )
+                * 2
+                - 1
             )
+            * torch.tensor([self.grid_dims[i] for i in [2, 1, 0]]).view(1, 1, 1, 1, 3)
             * scale
             * (
                 torch.rand(
@@ -198,17 +204,19 @@ class GridTransform(SpatialTransform):
             torch.nn.functional.conv_transpose3d(
                 torch.nn.functional.conv_transpose3d(
                     input=self.control_point_displacements.permute(0, 4, 1, 2, 3),
-                    weight=self.kernels_1d[0].view(1, 1, 1, 1, -1).expand(3, 3, -1, -1, -1),
-                    stride=(1,1,self.strides[0]),
-                    padding=(0,0,self.tails[0]),
+                    weight=self.kernels_1d[0]
+                    .view(1, 1, 1, 1, -1)
+                    .expand(3, 3, -1, -1, -1),
+                    stride=(1, 1, self.strides[0]),
+                    padding=(0, 0, self.tails[0]),
                 ),
                 weight=self.kernels_1d[1].view(1, 1, 1, -1, 1).expand(3, 3, -1, -1, -1),
                 stride=(1, self.strides[1], 1),
                 padding=(0, self.tails[1], 0),
             ),
             weight=self.kernels_1d[2].view(1, 1, -1, 1, 1).expand(3, 3, -1, -1, -1),
-            stride=(self.strides[2],1,1),
-            padding=(self.tails[2],0,0),
+            stride=(self.strides[2], 1, 1),
+            padding=(self.tails[2], 0, 0),
         )
         ddf = torch.nn.functional.grid_sample(
             input=ddf,  # (batch,xyz,z,y,x)
@@ -225,8 +233,13 @@ class GridTransform(SpatialTransform):
             padding_mode="zeros",
             align_corners=True,
         ).permute(0, 2, 3, 4, 1)
-        ratio = self.control_point_displacements.view(self.batch_size,-1,3).max(1)[0] / control_point_ddf.view(self.batch_size,-1,3).max(1)[0]
-        return ddf.permute(0, 2, 3, 4, 1) * ratio.view(self.batch_size,1,1,1,3)  # back to (batch,z,y,x,xyz)
+        ratio = (
+            self.control_point_displacements.view(self.batch_size, -1, 3).max(1)[0]
+            / control_point_ddf.view(self.batch_size, -1, 3).max(1)[0]
+        )
+        return ddf.permute(0, 2, 3, 4, 1) * ratio.view(
+            self.batch_size, 1, 1, 1, 3
+        )  # back to (batch,z,y,x,xyz)
 
     def evaluate_gaussian_spline(self):
         """
