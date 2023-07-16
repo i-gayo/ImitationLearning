@@ -31,7 +31,7 @@ class TPBEnv:
             self.transition.update(self.world, self.action)
             self.observation.update(self.world)
             # assemble observations and actions
-            episodes[step] = self.transition.next()
+            episodes += [self.transition.update(self.world, self.action)]
         return episodes
 
 
@@ -114,7 +114,7 @@ class LabelledImageWorld:
             dim=0,
         ).to(self.device)
 
-    def get_mask_coordinates(self, mask):
+    def get_mask_coords_mm(self, mask):
         # mask: (b,1,y,x,z)
         # return a list of coordinates
         return [
@@ -181,7 +181,7 @@ class LabelledImageWorld:
     def convert_mm2norm(self, input_tensor):
         r = len(input_tensor.shape)
         if r == 5:
-            return input_tensor / self.unit_dims.reshape(self.batch_size, 1, 1, 1, 3)
+            return input_tensor / self.unit_dims.view(self.batch_size, 1, 1, 1, 3)
         elif r == 2:
             return input_tensor / self.unit_dims
 
@@ -201,7 +201,7 @@ class NeedleGuide:
         """
         GRID_CENTRE = "centroid"  # ("centroid", "bbox")
         GRID_SIZE = [13, 13, 5]  # [x, y, spacing (mm)]
-        NEEDLE_LENGTH = 10  # in mm
+        NEEDLE_LENGTH = 20  # in mm
         NUM_NEEDLE_DEPTHS = 3  # integer, [2, needle_length]
         NUM_NEEDLE_SAMPLES = NEEDLE_LENGTH  # int(2*NEEDLE_LENGTH+1)
         POLICY = "lesion_centre"  # GUIDANCE = 'nb27' # 'nb8'
@@ -216,18 +216,18 @@ class NeedleGuide:
         self.num_needle_samples = NUM_NEEDLE_SAMPLES
 
         ## align brachytherapy template (13x13 5mm apart)
-        gland_coordinates = world.get_mask_coordinates(world.gland)
+        gland_coords_mm = world.get_mask_coords_mm(world.gland)
         if GRID_CENTRE == "centroid":
             self.grid_centre = torch.stack(
-                [gland_coordinates[b].mean(dim=0) for b in range(world.batch_size)],
+                [gland_coords_mm[b].mean(dim=0) for b in range(world.batch_size)],
                 dim=0,
             )
         elif GRID_CENTRE == "bbox":
             self.grid_centre = torch.stack(
                 [
                     (
-                        gland_coordinates[b].max(dim=0)[0]
-                        + gland_coordinates[b].min(dim=0)[0]
+                        gland_coords_mm[b].max(dim=0)[0]
+                        + gland_coords_mm[b].min(dim=0)[0]
                     )
                     / 2
                     for b in range(world.batch_size)
@@ -239,18 +239,34 @@ class NeedleGuide:
         #  a list of NUM_NEEDLE_DEPTHS (batch,13,13,NUM_NEEDLE_SAMPLES,3)
         (
             self.needle_samples_mm,
-            self.sample_x,
-            self.sample_y,
-            self.sample_d,
+            self.needle_centres_mm,
         ) = self.get_needle_samples_mm(world.batch_size, world.device)
         # TODO: check the target covered by the guide locations
         # convert to normalised coordinates, TODO: add any offset in mm here
         self.needle_samples_norm = [
             world.convert_mm2norm(mm) for mm in self.needle_samples_mm
         ]
+        # sample_x/y 13-class classification, sample_d NUM_NEEDLE_DEPTHS-class classification
+        """ if use an index of [n, NUM_NEEDLE_DEPTHS, y, x] - a 13*13*NUM_NEEDLE_DEPTHS classification
+        nc = NUM_NEEDLE_DEPTHS*GRID_SIZE[0]*GRID_SIZE[1]
+        if INITIAL_SAMPLE_LOCATION == 'random':
+            flat_idx = torch.randint(high=nc,size=[world.batch_size])
+        elif INITIAL_SAMPLE_LOCATION == 'centre':
+            flat_idx = torch.tensor([int((nc-.5)/2)]*2) 
+        self.sample_location_index = torch.nn.functional.one_hot(flat_idx,nc).type(torch.bool).view(
+            world.batch_size, NUM_NEEDLE_DEPTHS, GRID_SIZE[1], GRID_SIZE[0]).to(device)
+        """
+        self.sample_x, self.sample_y, self.sample_d = (
+            torch.ones(world.batch_size, self.grid_size[0], device=world.device)
+            / self.grid_size[0],
+            torch.ones(world.batch_size, self.grid_size[1], device=world.device)
+            / self.grid_size[1],
+            torch.ones(world.batch_size, self.num_needle_depths, device=world.device)
+            / self.num_needle_depths,
+        )
 
         ## initialise guidance
-        # observe: two-class [negative, positive]
+        # observe: [x,y,z] * [negative, positive] binary classifications
         # TODO: add different guidance method
         self.observe_update = torch.zeros(
             world.batch_size, 3, 2, dtype=torch.bool, device=world.device
@@ -260,7 +276,7 @@ class NeedleGuide:
         needle_centre_d = torch.linspace(
             -self.needle_length / 2, self.needle_length / 2, self.num_needle_depths
         ).tolist()
-        # a list of NUM_NEEDLE_DEPTHS (batch,13,13,NUM_NEEDLE_SAMPLES,3)
+        # a list of NUM_NEEDLE_DEPTHS (batch,13,13,NUM_NEEDLE_SAMPLES,yxz)
         needle_samples_mm = [
             torch.stack(
                 [
@@ -285,34 +301,47 @@ class NeedleGuide:
                         ),
                         dim=3,
                     ).to(device)
-                    + self.grid_centre[n].reshape(1, 1, 1, 3)
+                    + self.grid_centre[n].view(1, 1, 1, 3)
                     for n in range(batch_size)
                 ],
                 dim=0,
             )  # for each data in a batch then stack in dim=0
             for centre_d in needle_centre_d  # note that the grid_sample function does not accept multi-channel grid input, so list is used here
         ]  # for each needle depth
-        # initialise the sampling location
-        """ if use an index of [n, NUM_NEEDLE_DEPTHS, y, x]
-        nc = NUM_NEEDLE_DEPTHS*GRID_SIZE[0]*GRID_SIZE[1]
-        if INITIAL_SAMPLE_LOCATION == 'random':
-            flat_idx = torch.randint(high=nc,size=[world.batch_size])
-        elif INITIAL_SAMPLE_LOCATION == 'centre':
-            flat_idx = torch.tensor([int((nc-.5)/2)]*2) 
-        self.sample_location_index = torch.nn.functional.one_hot(flat_idx,nc).type(torch.bool).view(
-            world.batch_size, NUM_NEEDLE_DEPTHS, GRID_SIZE[1], GRID_SIZE[0]).to(device)
-        """
-        sample_d = (
-            torch.ones(batch_size, self.num_needle_depths, device=device)
-            / self.num_needle_depths
+
+        # a single array (batch,13,13,NUM_NEEDLE_DEPTHS,yxz)
+        needle_centres_mm = torch.concat(
+            [
+                torch.stack(
+                    [
+                        torch.stack(
+                            torch.meshgrid(
+                                torch.linspace(
+                                    -(self.grid_size[1] - 1) * self.grid_size[2] / 2,
+                                    (self.grid_size[1] - 1) * self.grid_size[2] / 2,
+                                    self.grid_size[1],
+                                ),
+                                torch.linspace(
+                                    -(self.grid_size[0] - 1) * self.grid_size[2] / 2,
+                                    (self.grid_size[0] - 1) * self.grid_size[2] / 2,
+                                    self.grid_size[0],
+                                ),
+                                torch.tensor(centre_d),
+                                indexing="ij",
+                            ),
+                            dim=3,
+                        ).to(device)
+                        + self.grid_centre[n].view(1, 1, 1, 3)
+                        for n in range(batch_size)
+                    ],
+                    dim=0,
+                )  # for each data in a batch then stack in dim=0
+                for centre_d in needle_centre_d  # note that the grid_sample function does not accept multi-channel grid input, so list is used here
+            ],  # for each needle depth
+            dim=3,
         )
-        sample_x = (
-            torch.ones(batch_size, self.grid_size[0], device=device) / self.grid_size[0]
-        )
-        sample_y = (
-            torch.ones(batch_size, self.grid_size[1], device=device) / self.grid_size[1]
-        )
-        return (needle_samples_mm, sample_x, sample_y, sample_d)
+
+        return (needle_samples_mm, needle_centres_mm)
 
     def update(self, world, observation):
         ## calculate the action according to a policy
@@ -321,19 +350,19 @@ class NeedleGuide:
             Implement "lesion_centre" policy:
              - check observe_mm nearest to the lesion centre,
              - if false, update observe_update
-             - if true, update sample_x, y, z, with nearest centre or largest CCL
+             - if true, update sample_x, y, z, with nearest centre (or largest CCL)
             """
 
-            target_coordinates = world.get_mask_coordinates(world.target)
-            self.target_centre = torch.stack(
-                [target_coordinates[b].mean(dim=0) for b in range(world.batch_size)],
+            target_coords_mm = world.get_mask_coords_mm(world.target)
+            self.target_centre_mm = torch.stack(
+                [target_coords_mm[b].mean(dim=0) for b in range(world.batch_size)],
                 dim=0,
             )
 
             # if three_class: observe_update = ((self.target_centre-world.observe_mm) / (self.observe_stepsize*2)).round().sign()
             # self.observe_update = torch.nn.functional.one_hot((observe_update+1).type(torch.int64),num_classes=3)
             d_t2o = (
-                self.target_centre - world.observe_mm
+                self.target_centre_mm - world.observe_mm
             )  # difference between current observe location and lesion centre
             self.observe_update = torch.stack(
                 (d_t2o >= self.observe_stepsize, d_t2o <= -self.observe_stepsize), dim=2
@@ -345,27 +374,54 @@ class NeedleGuide:
                 )
                 world.observe_mm += self.observe_update_mm
 
-            else:  # update sampled needles (batch,num_needle_depths,grid_size,grid_size,num_needle_samples)
-                needle_sampled = torch.concat(
-                    [
-                        self.sampler(
-                            world.target.type(torch.float32),
-                            self.needle_samples_norm[d],
+            # update sampled needles
+            # (batch,num_needle_depths,grid_size,grid_size,num_needle_samples)
+            if (self.observe_update == False).all():  # wait until the whole batch find observe
+                # the closest target to needle centre distance
+                d_t2n = (
+                    (
+                        (
+                            self.target_centre_mm.view(world.batch_size, 1, 1, 1, 3)
+                            - self.needle_centres_mm
                         )
-                        for d in range(self.num_needle_depths)
-                    ],
-                    dim=1,
+                        ** 2
+                    )
+                    .sum(dim=4)
+                    .sqrt()
                 )
-                core_length = needle_sampled.sum(dim=4)
-                needle_sampled_idx = (
-                    core_length
-                    == core_length.reshape(world.batch_size, -1)
-                    .max(1)[0]
-                    .reshape(world.batch_size, 1, 1, 1)
-                ).nonzero
-                # TODO: check visually
+                d_t2n_min, needle_sampled_idx_flat = torch.min(
+                    d_t2n.view(world.batch_size, -1), dim=1
+                )
+                # needle_sampled_idx = (d_t2n==d_t2n_min.view(3,1,1,1)).nonzero()
+                if (d_t2n_min[0:2] >= self.grid_size[2]).any() or (
+                    d_t2n_min[2] >= (self.needle_length / 2)
+                ):
+                    print(
+                        "Current sampled needle location may not be closet to the target."
+                    )
 
-            return 0
+                needle_coords_norm = (
+                    torch.stack(self.needle_samples_norm, dim=3)
+                    .view(world.batch_size, -1, self.num_needle_samples, 3)[
+                        range(world.batch_size), needle_sampled_idx_flat, :, :
+                    ]
+                    .view(world.batch_size, 1, 1, self.num_needle_samples, 3)
+                )
+                needle_sampled = self.sampler(
+                    world.target.type(torch.float32), needle_coords_norm
+                )
+                """NB. computational expensive to compute core length
+                needle_sampled = torch.concat([self.sampler(world.target.type(torch.float32),self.needle_samples_norm[d])
+                        for d in range(self.num_needle_depths)],dim=1)
+                core_length = needle_sampled.sum(dim=4)
+                ccl_max, needle_sampled_idx_flat = core_length.view(world.batch_size,-1).max(dim=1)
+                needle_sampled_idx = (core_length==ccl_max.view(world.batch_size,1,1,1)).nonzero()
+                """
+                return 0
+            else:
+                needle_sampled_idx = None
+
+        # TODO: check visually
 
     def sample_needles(self):
         return 0
@@ -406,9 +462,12 @@ class DeformationTransition:
 
     def update(self, world, action, threshold=0.45):
         self.random_transform.generate_random_transform()
-        transformed_volume = self.random_transform.warp(
-            torch.concat([world.gland, world.target], dim=1).type(torch.float32)
-        ) >= threshold
+        transformed_volume = (
+            self.random_transform.warp(
+                torch.concat([world.gland, world.target], dim=1).type(torch.float32)
+            )
+            >= threshold
+        )
         world.gland, world.target = (
             transformed_volume[:, [0], ...],
             transformed_volume[:, [1], ...],
@@ -440,7 +499,7 @@ class UltrasoundSlicing:
     def update(self, world):
         # transformation TODO: add rotation for non-orthogonal reslicing
         slices_norm = [
-            s + world.observe_norm.reshape(world.batch_size, 1, 1, 1, 3)
+            s + world.observe_norm.view(world.batch_size, 1, 1, 1, 3)
             for s in self.reference_observe_slices_norm
         ]
 
