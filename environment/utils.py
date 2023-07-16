@@ -3,7 +3,7 @@ import torch
 
 class SpatialTransform:
     """
-    A class for spatial transformation for 3D image volume (batch,c,y,x,z)
+    A class for spatial transformation for 3D image volume (batch,c,z,y,x)
     """
 
     def __init__(self, volsize, batch_size, device):
@@ -17,25 +17,27 @@ class SpatialTransform:
         self.voxel_coords = (
             torch.stack(
                 torch.meshgrid(
+                    torch.linspace(-1, 1, self.volsize[2]),
                     torch.linspace(-1, 1, self.volsize[1]),
                     torch.linspace(-1, 1, self.volsize[0]),
-                    torch.linspace(-1, 1, self.volsize[2]),
                     indexing="ij",
                 ),
                 dim=3,
             )[None, ...]
             .expand(self.batch_size, -1, -1, -1, -1)
             .to(self.device)
-        )
+        )[...,[2,1,0]]  # ijk -> xyz
+
+        return 0
 
     def warp(self, vol):
         """
-        :param vol: 5d (batch,c,y,x,z)
+        :param vol: 5d (batch,c,z,y,x)
         """
         self.compute_ddf()  # child class function
         return torch.nn.functional.grid_sample(
             vol,
-            self.ddf + self.voxel_coords,
+            self.ddf + self.voxel_coords, 
             mode="bilinear",
             padding_mode="zeros",
             align_corners=True,
@@ -65,16 +67,16 @@ class GridTransform(SpatialTransform):
         self.control_point_coords = (
             torch.stack(
                 torch.meshgrid(
+                    torch.linspace(-1, 1, self.grid_size[2]),
                     torch.linspace(-1, 1, self.grid_size[1]),
                     torch.linspace(-1, 1, self.grid_size[0]),
-                    torch.linspace(-1, 1, self.grid_size[2]),
                     indexing="ij",
                 ),
                 dim=3,
             )[None, ...]
             .expand(self.batch_size, -1, -1, -1, -1)
             .to(self.device)
-        )
+        )[...,[2,1,0]]  # ijk -> xyz
         self.grid_dims = [2 / (self.grid_size[i] - 1) for i in [0, 1, 2]]  # (x,y,z)
 
         self.control_point_displacements = torch.zeros_like(self.control_point_coords)
@@ -99,9 +101,9 @@ class GridTransform(SpatialTransform):
 
         elif self.interp_type == "t-conv":
             sigma_voxel = [
-                1,
-                1,
-                1,
+                10,
+                10,
+                5,
             ]  #:param sigma_voxel: (x,y,z) Gaussian spline parameter sigma in voxel (the larger sigma the smoother transformation)
             voxdims = [2 / (v - 1) for v in self.volsize]
             grid_dims = [2 / (u - 1) for u in self.grid_size]
@@ -120,8 +122,8 @@ class GridTransform(SpatialTransform):
                 for d in [0, 1, 2]
             ]
             # N.B normalising by sum does not preserve control point displacements
-            # TODO: normalising using control point displacement for displacement-preserving alternative
-            self.kernels_1d = [k / k.sum() for k in self.kernels_1d]
+            # normalising using control point displacement for displacement-preserving alternative in transpose_conv_upsampling
+            # self.kernels_1d = [k / k.sum() for k in self.kernels_1d]
 
     def generate_random_transform(self, rate=0.25, scale=0.1):
         """
@@ -130,16 +132,16 @@ class GridTransform(SpatialTransform):
         :param scale: [0,1] scale of unit grid size the random displacement
         """
         self.control_point_displacements = (
-            torch.rand(
+            (torch.rand(
                 [
                     self.batch_size,
+                    self.grid_size[2],
                     self.grid_size[1],
                     self.grid_size[0],
-                    self.grid_size[2],
                     3,
                 ]
-            )
-            * torch.tensor([self.grid_dims[i] for i in [1, 0, 2]]).reshape(
+            )*2-1)
+            * torch.tensor([self.grid_dims[i] for i in [2, 1, 0]]).view(
                 1, 1, 1, 1, 3
             )
             * scale
@@ -147,9 +149,9 @@ class GridTransform(SpatialTransform):
                 torch.rand(
                     [
                         self.batch_size,
+                        self.grid_size[2],
                         self.grid_size[1],
                         self.grid_size[0],
-                        self.grid_size[2],
                     ]
                 )
                 < rate
@@ -159,7 +161,7 @@ class GridTransform(SpatialTransform):
     def compute_ddf(self):
         """
         Compute dense displacement field (ddf), interpolating displacement vectors on all voxels
-        N.B. like all volume data, self.ddf is in y-x-z order
+        N.B. like all volume data, self.ddf is in z-y-x order
         """
         match self.interp_type:
             case "linear":
@@ -174,10 +176,10 @@ class GridTransform(SpatialTransform):
 
     def linear_interpolation(self):
         """
-        input: permute to (batch,c,y,x,z), c=yxz
-        grid: (batch,y,x,z,yxz)
+        input: permute to (batch,c,z,y,x), c=xyz
+        grid: (batch,z,y,x,xyz)
 
-        Return ddf: permute back to (batch,y,x,z,yxz)
+        Return ddf: permute back to (batch,z,y,x,xyz)
         """
         return torch.nn.functional.grid_sample(
             input=self.control_point_displacements.permute(0, 4, 1, 2, 3),
@@ -196,30 +198,35 @@ class GridTransform(SpatialTransform):
             torch.nn.functional.conv_transpose3d(
                 torch.nn.functional.conv_transpose3d(
                     input=self.control_point_displacements.permute(0, 4, 1, 2, 3),
-                    weight=self.kernels_1d[1]
-                    .reshape(1, 1, -1, 1, 1)
-                    .expand(3, 3, -1, -1, -1),
-                    stride=(self.strides[1], 1, 1),
-                    padding=(self.tails[1], 0, 0),
+                    weight=self.kernels_1d[0].view(1, 1, 1, 1, -1).expand(3, 3, -1, -1, -1),
+                    stride=(1,1,self.strides[0]),
+                    padding=(0,0,self.tails[0]),
                 ),
-                weight=self.kernels_1d[0]
-                .reshape(1, 1, 1, -1, 1)
-                .expand(3, 3, -1, -1, -1),
-                stride=(1, self.strides[0], 1),
-                padding=(0, self.tails[0], 0),
+                weight=self.kernels_1d[1].view(1, 1, 1, -1, 1).expand(3, 3, -1, -1, -1),
+                stride=(1, self.strides[1], 1),
+                padding=(0, self.tails[1], 0),
             ),
-            weight=self.kernels_1d[2].reshape(1, 1, 1, 1, -1).expand(3, 3, -1, -1, -1),
-            stride=(1, 1, self.strides[2]),
-            padding=(0, 0, self.tails[2]),
+            weight=self.kernels_1d[2].view(1, 1, -1, 1, 1).expand(3, 3, -1, -1, -1),
+            stride=(self.strides[2],1,1),
+            padding=(self.tails[2],0,0),
         )
         ddf = torch.nn.functional.grid_sample(
-            input=ddf,  # (batch,yxz,y,x,z)
-            grid=self.voxel_coords,  # (batch,y,x,z,yxz)
+            input=ddf,  # (batch,xyz,z,y,x)
+            grid=self.voxel_coords,  # (batch,z,y,x,xyz)
             mode="bilinear",
             padding_mode="zeros",
             align_corners=True,
         )
-        return ddf.permute(0, 2, 3, 4, 1)  # back to (batch,y,x,z,yxz)
+        # normalise to preserve displacement
+        control_point_ddf = torch.nn.functional.grid_sample(
+            input=ddf,  # (batch,xyz,z,y,x)
+            grid=self.control_point_coords,  # (batch,z,y,x,xyz)
+            mode="bilinear",
+            padding_mode="zeros",
+            align_corners=True,
+        ).permute(0, 2, 3, 4, 1)
+        ratio = self.control_point_displacements.view(self.batch_size,-1,3).max(1)[0] / control_point_ddf.view(self.batch_size,-1,3).max(1)[0]
+        return ddf.permute(0, 2, 3, 4, 1) * ratio.view(self.batch_size,1,1,1,3)  # back to (batch,z,y,x,xyz)
 
     def evaluate_gaussian_spline(self):
         """

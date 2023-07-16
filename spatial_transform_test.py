@@ -15,7 +15,7 @@ H5FILE_BIN = "data/" + cfg["Preprocess"]["FILE_PREFIX"] + "bin.h5"
 fh5_bin = h5py.File(H5FILE_BIN, "r")
 voxdims_all = fh5_bin["voxdims_all"][()]
 
-idx = 6
+idx = 10
 
 gland = torch.tensor(fh5_bin["/gland_%04d" % idx][()], dtype=torch.bool, device=device)
 targets = torch.tensor(
@@ -25,19 +25,19 @@ num_t = targets.max()
 gland = gland[None, None].repeat(num_t, 1, 1, 1, 1)
 target = torch.stack([targets == (i + 1) for i in range(num_t)]).unsqueeze(1)
 
-volume = torch.concat([gland, target], dim=1).type(torch.float32)  # [...,:-10,:]  # reduce x for debugging
+volume = torch.concat([gland, target], dim=1).type(torch.float32)[...,:-15]  # reduce x for debugging
 
 
-random_transform = GridTransform(grid_size=[8,8,4], interp_type='t-conv', volsize=[volume.shape[i] for i in [3,2,4]], batch_size=volume.shape[0], device=device)
-random_transform.generate_random_transform()
+random_transform = GridTransform(grid_size=[7,8,4], interp_type='linear', volsize=list(volume.shape[-3:][::-1]), batch_size=volume.shape[0], device=device)
+random_transform.generate_random_transform(rate=0.5, scale=0.5)
 transformed_volume = random_transform.warp(volume)
 
 #"""debug
 import SimpleITK as sitk
-threshold = 0.45    
+threshold = 0.1    
 for b in range(volume.shape[0]):
-    sitk.WriteImage(sitk.GetImageFromArray((volume[b,0,...].squeeze().cpu().numpy()>=threshold).astype('uint8')*255), 'b%d_gland.nii'%b)
-    sitk.WriteImage(sitk.GetImageFromArray((volume[b,1,...].squeeze().cpu().numpy()>=threshold).astype('uint8')*255), 'b%d_target.nii'%b)
+    sitk.WriteImage(sitk.GetImageFromArray((            volume[b,0,...].squeeze().cpu().numpy()>=threshold).astype('uint8')*255), 'b%d_gland.nii'%b)
+    sitk.WriteImage(sitk.GetImageFromArray((            volume[b,1,...].squeeze().cpu().numpy()>=threshold).astype('uint8')*255), 'b%d_target.nii'%b)
     sitk.WriteImage(sitk.GetImageFromArray((transformed_volume[b,0,...].squeeze().cpu().numpy()>=threshold).astype('uint8')*255), 'b%d_gland_transformed.nii'%b)
     sitk.WriteImage(sitk.GetImageFromArray((transformed_volume[b,1,...].squeeze().cpu().numpy()>=threshold).astype('uint8')*255), 'b%d_target_transformed.nii'%b)
 print('volumes saved.')
