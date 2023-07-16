@@ -21,7 +21,7 @@ def main():
     voxdims_all = fh5_bin["voxdims_all"][()]
 
     for idx, voxdims in enumerate(voxdims_all):
-        idx = 10 # 6
+        # debug: idx = 10 # 6
 
         gland = torch.tensor(
             fh5_bin["/gland_%04d" % idx][()], dtype=torch.bool, device=device
@@ -39,7 +39,9 @@ def main():
             voxdims=[voxdims.tolist()] * num_t,
         )  # create a predefined biopsy environment
 
-        tpb_envs.run()
+        episodes = tpb_envs.run()
+        
+        print("Simulation done for all data in the No.%d batch." % idx)
 
         #TODO: save episodes to files
 

@@ -31,7 +31,9 @@ class TPBEnv:
             self.transition.update(self.world, self.action)
             self.observation.update(self.world)
             # assemble observations and actions
-            episodes += [self.transition.update(self.world, self.action)]
+            episodes += [(self.world, self.action, self.observation)]
+            if self.action.sample_status.all():
+                break
         return episodes
 
 
@@ -514,7 +516,7 @@ class DeformationTransition:
         )
 
     def update(self, world, action, threshold=0.45):
-        self.random_transform.generate_random_transform()
+        self.random_transform.generate_random_transform(rate=0, scale=0.0)
         transformed_volume = (
             self.random_transform.warp(
                 torch.concat([world.gland, world.target], dim=1).type(torch.float32)
