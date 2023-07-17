@@ -78,9 +78,7 @@ class GridTransform(SpatialTransform):
             )[None, ...]
             .expand(self.batch_size, -1, -1, -1, -1)
             .to(self.device)
-        )[
-            ..., [2, 1, 0]
-        ]  # ijk -> xyz
+        )[..., [2, 1, 0]]  # ijk -> xyz
         self.grid_dims = [2 / (self.grid_size[i] - 1) for i in [0, 1, 2]]  # (x,y,z)
 
         self.control_point_displacements = torch.zeros_like(self.control_point_coords)

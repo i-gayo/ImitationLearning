@@ -21,7 +21,8 @@ def main():
     voxdims_all = fh5_bin["voxdims_all"][()]
 
     for idx, voxdims in enumerate(voxdims_all):
-        # debug: idx = 10 # 6
+        # debug: 
+        idx = 10 # 6
 
         gland = torch.tensor(
             fh5_bin["/gland_%04d" % idx][()], dtype=torch.bool, device=device
@@ -30,13 +31,13 @@ def main():
             fh5_bin["/targets_%04d" % idx][()], dtype=torch.uint8, device=device
         )
         # debug: 
-        gland, targets = gland[:,:-35,:], targets[:,:-35,:]
+        gland, targets = gland[:,:,:-35], targets[:,:,:-35]
 
         num_t = targets.max()
         tpb_envs = TPBEnv(
-            gland=gland[None, None].repeat(num_t, 1, 1, 1, 1),
+            gland=gland[None, None].expand(num_t, -1, -1, -1, -1),
             target=torch.stack([targets == (i + 1) for i in range(num_t)]).unsqueeze(1),
-            voxdims=[voxdims.tolist()] * num_t,
+            voxdims=[voxdims[::-1].tolist()] * num_t,
         )  # create a predefined biopsy environment
 
         episodes = tpb_envs.run()
