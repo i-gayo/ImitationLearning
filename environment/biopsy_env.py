@@ -1,6 +1,6 @@
 import torch
 
-from environment.utils import GridTransform
+from environment.utils import GridTransform, sampler
 
 
 ## main env classes
@@ -31,9 +31,24 @@ class TPBEnv:
             self.transition.update(self.world, self.action)
             self.observation.update(self.world)
             # assemble observations and actions
-            episodes += [(self.world, self.action, self.observation)]
+            episode = {
+                "gland": self.world.gland,
+                "target": self.world.target,
+                "observe_norm": self.world.observe_norm,
+                "observe_update": self.action.observe_update,
+                "sample_idx": [
+                    self.action.sample_x,
+                    self.action.sample_y,
+                    self.action.sample_d,
+                ],
+                "ccl_sampled": self.action.ccl_sampled,
+                "images_observed": self.observation.images_observed,
+            }
+            episodes += [episode]
             if self.action.sample_status.all():
                 break
+            if step == (self.max_steps - 1):
+                print("WARNING: maximum steps reached.")
         return episodes
 
 
@@ -279,6 +294,7 @@ class NeedleGuide:
                 device=world.device,
             ),
         )
+        self.ccl_sampled = torch.zeros(world.batch_size, device=world.device)
 
         ## initialise guidance
         # observe: [x,y,z] * [negative, positive] binary classifications
@@ -408,7 +424,7 @@ class NeedleGuide:
                     # (batch,num_needle_depths,grid_size,grid_size,num_needle_samples)
                     needle_sampled_all = torch.concat(
                         [
-                            self.sampler(
+                            sampler(
                                 world.target.type(torch.float32),
                                 self.needle_samples_norm[d],
                             )
@@ -451,13 +467,6 @@ class NeedleGuide:
                         d_t2n.view(world.batch_size, -1), dim=1
                     )
 
-                    if (d_t2n_min[0:2] >= self.grid_size[2]).any() or (
-                        d_t2n_min[2] >= (self.needle_length / 2)
-                    ):
-                        print(
-                            "Current sampled needle location may not be closet to the target."
-                        )
-
                     needle_coords_norm = (
                         torch.stack(self.needle_samples_norm, dim=2)
                         .view(world.batch_size, self.num_needle_samples, -1, 3)[
@@ -465,10 +474,12 @@ class NeedleGuide:
                         ]
                         .view(world.batch_size, self.num_needle_samples, 1, 1, 3)
                     )
-                    needle_sampled = self.sampler(
+
+                    needle_sampled = sampler(
                         world.target.type(torch.float32), needle_coords_norm
                     )
-                    self.ccl_sampled = needle_sampled.squeeze().sum(dim=1)
+                    self.ccl_sampled = needle_sampled.squeeze(dim=(1, 3, 4)).sum(dim=1)
+
                     needle_sampled_idx = (
                         d_t2n == d_t2n_min.view(world.batch_size, 1, 1, 1)
                     ).nonzero()
@@ -481,16 +492,6 @@ class NeedleGuide:
                     self.sample_d[
                         needle_sampled_idx[:, 0], needle_sampled_idx[:, 1]
                     ] = True
-
-    @staticmethod
-    def sampler(vol, coords):
-        return torch.nn.functional.grid_sample(
-            input=vol,
-            grid=coords,
-            mode="bilinear",
-            padding_mode="zeros",
-            align_corners=True,
-        )
 
 
 ## transition classes
@@ -517,7 +518,7 @@ class DeformationTransition:
         )
 
     def update(self, world, action, threshold=0.45):
-        self.random_transform.generate_random_transform(rate=0.0, scale=0.0)
+        self.random_transform.generate_random_transform(rate=0.25, scale=0.2)
         transformed_volume = (
             self.random_transform.warp(
                 torch.concat([world.gland, world.target], dim=1).type(torch.float32)
@@ -561,32 +562,22 @@ class UltrasoundSlicing:
 
         # interpolation
         gland_slices = [
-            self.reslicer(world.gland.type(torch.float32), g) for g in slices_norm
+            sampler(world.gland.type(torch.float32), g) for g in slices_norm
         ]
         target_slices = [
-            self.reslicer(world.target.type(torch.float32), g) for g in slices_norm
+            sampler(world.target.type(torch.float32), g) for g in slices_norm
         ]
         # gather here all the observed
-        self.observation = [gland_slices, target_slices]
+        self.images_observed = [gland_slices, target_slices]
         """debug
         import SimpleITK as sitk
         threshold = 0.45
         for b in range(world.batch_size):
             sitk.WriteImage(sitk.GetImageFromArray((world.gland[b,...].squeeze().cpu().numpy()>=threshold).astype('uint8')*255), 'b%d_gland.nii'%b)
             sitk.WriteImage(sitk.GetImageFromArray((world.target[b,...].squeeze().cpu().numpy()>=threshold).astype('uint8')*255), 'b%d_target.nii'%b)
-            sitk.WriteImage(sitk.GetImageFromArray((self.observation[0][0][b,...].squeeze().cpu().numpy()>=threshold).astype('uint8')*255), 'b%d_gland_axis.jpg'%b)
-            sitk.WriteImage(sitk.GetImageFromArray((self.observation[0][1][b,...].squeeze().cpu().numpy()>=threshold).astype('uint8')*255), 'b%d_gland_sag.jpg'%b)
-            sitk.WriteImage(sitk.GetImageFromArray((self.observation[1][0][b,...].squeeze().cpu().numpy()>=threshold).astype('uint8')*255), 'b%d_target_axis.jpg'%b)
-            sitk.WriteImage(sitk.GetImageFromArray((self.observation[1][1][b,...].squeeze().cpu().numpy()>=threshold).astype('uint8')*255), 'b%d_target_sag.jpg'%b)
+            sitk.WriteImage(sitk.GetImageFromArray((self.images_observed[0][0][b,...].squeeze().cpu().numpy()>=threshold).astype('uint8')*255), 'b%d_gland_axis.jpg'%b)
+            sitk.WriteImage(sitk.GetImageFromArray((self.images_observed[0][1][b,...].squeeze().cpu().numpy()>=threshold).astype('uint8')*255), 'b%d_gland_sag.jpg'%b)
+            sitk.WriteImage(sitk.GetImageFromArray((self.images_observed[1][0][b,...].squeeze().cpu().numpy()>=threshold).astype('uint8')*255), 'b%d_target_axis.jpg'%b)
+            sitk.WriteImage(sitk.GetImageFromArray((self.images_observed[1][1][b,...].squeeze().cpu().numpy()>=threshold).astype('uint8')*255), 'b%d_target_sag.jpg'%b)
         return 0
         """
-
-    @staticmethod
-    def reslicer(vol, coords):
-        return torch.nn.functional.grid_sample(
-            input=vol,
-            grid=coords,
-            mode="bilinear",
-            padding_mode="zeros",
-            align_corners=True,
-        )

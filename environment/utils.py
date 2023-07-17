@@ -37,13 +37,7 @@ class SpatialTransform:
         :param vol: 5d (batch,c,z,y,x)
         """
         self.compute_ddf()  # child class function
-        return torch.nn.functional.grid_sample(
-            vol,
-            self.ddf + self.voxel_coords,
-            mode="bilinear",
-            padding_mode="zeros",
-            align_corners=True,
-        )
+        return sampler(vol, self.ddf + self.voxel_coords)
 
 
 # TODO
@@ -187,12 +181,8 @@ class GridTransform(SpatialTransform):
 
         Return ddf: permute back to (batch,z,y,x,xyz)
         """
-        return torch.nn.functional.grid_sample(
-            input=self.control_point_displacements.permute(0, 4, 1, 2, 3),
-            grid=self.voxel_coords,
-            mode="bilinear",
-            padding_mode="zeros",
-            align_corners=True,
+        return sampler(
+            self.control_point_displacements.permute(0, 4, 1, 2, 3), self.voxel_coords
         ).permute(0, 2, 3, 4, 1)
 
     def transpose_conv_upsampling(self):
@@ -218,21 +208,11 @@ class GridTransform(SpatialTransform):
             stride=(self.strides[2], 1, 1),
             padding=(self.tails[2], 0, 0),
         )
-        ddf = torch.nn.functional.grid_sample(
-            input=ddf,  # (batch,xyz,z,y,x)
-            grid=self.voxel_coords,  # (batch,z,y,x,xyz)
-            mode="bilinear",
-            padding_mode="zeros",
-            align_corners=True,
-        )
+        ddf = sampler(ddf, self.voxel_coords)
         # normalise to preserve displacement
-        control_point_ddf = torch.nn.functional.grid_sample(
-            input=ddf,  # (batch,xyz,z,y,x)
-            grid=self.control_point_coords,  # (batch,z,y,x,xyz)
-            mode="bilinear",
-            padding_mode="zeros",
-            align_corners=True,
-        ).permute(0, 2, 3, 4, 1)
+        control_point_ddf = sampler(ddf, self.control_point_coords).permute(
+            0, 2, 3, 4, 1
+        )
         ratio = (
             self.control_point_displacements.view(self.batch_size, -1, 3).max(1)[0]
             / control_point_ddf.view(self.batch_size, -1, 3).max(1)[0]
@@ -251,3 +231,14 @@ class GridTransform(SpatialTransform):
             self.ddf[..., d] = torch.matmul(
                 self.control_point_displacements[..., d], self.control_to_voxel_weights
             )
+
+
+## common functions
+def sampler(vol, coords):
+    return torch.nn.functional.grid_sample(
+        input=vol,
+        grid=coords,
+        mode="bilinear",
+        padding_mode="zeros",
+        align_corners=True,
+    )

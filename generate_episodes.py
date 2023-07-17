@@ -1,5 +1,6 @@
 
 import configparser
+import time
 
 import h5py
 import torch
@@ -21,8 +22,7 @@ def main():
     voxdims_all = fh5_bin["voxdims_all"][()]
 
     for idx, voxdims in enumerate(voxdims_all):
-        # debug: 
-        idx = 10 # 6
+        # debug: idx = 10 # 6
 
         gland = torch.tensor(
             fh5_bin["/gland_%04d" % idx][()], dtype=torch.bool, device=device
@@ -40,12 +40,15 @@ def main():
             voxdims=[voxdims[::-1].tolist()] * num_t,
         )  # create a predefined biopsy environment
 
+        t0 = time.time()
         episodes = tpb_envs.run()
-        
-        print("Simulation done for all data in the No.%d batch." % idx)
+        t1 = time.time()
 
+        print("Simulation done for all data in the No.%d batch in %05f seconds." % (idx, t1-t0))
+        print(["{0:0.3f}".format(ccl) for ccl in episodes[-1]['ccl_sampled'].tolist()])
         #TODO: save episodes to files
 
 
 if __name__ == "__main__":
     main()
+3
