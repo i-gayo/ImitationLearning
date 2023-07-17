@@ -114,7 +114,9 @@ class LabelledImageWorld:
                 for n in range(self.batch_size)
             ],
             dim=0,
-        ).to(self.device)[..., [2, 1, 0]]  # ijk -> xyz
+        ).to(self.device)[
+            ..., [2, 1, 0]
+        ]  # ijk -> xyz
 
     def get_mask_coords_mm(self, mask):
         # mask: (b,1,z,y,x)
@@ -147,7 +149,9 @@ class LabelledImageWorld:
                 for n in range(self.batch_size)
             ],
             dim=0,
-        ).to(self.device)[..., [2, 1, 0]]  # ijk -> xyz
+        ).to(self.device)[
+            ..., [2, 1, 0]
+        ]  # ijk -> xyz
         if norm:
             reference_slice_axial = self.convert_mm2norm(reference_slice_axial)
         return reference_slice_axial
@@ -175,7 +179,9 @@ class LabelledImageWorld:
                 for n in range(self.batch_size)
             ],
             dim=0,
-        ).to(self.device)[..., [2, 1, 0]]  # ijk -> xyz
+        ).to(self.device)[
+            ..., [2, 1, 0]
+        ]  # ijk -> xyz
         if norm:
             reference_slice_sagittal = self.convert_mm2norm(reference_slice_sagittal)
         return reference_slice_sagittal
@@ -207,8 +213,8 @@ class NeedleGuide:
         NEEDLE_LENGTH = 20  # in mm
         NUM_NEEDLE_DEPTHS = 3  # integer, [2, needle_length]
         NUM_NEEDLE_SAMPLES = NEEDLE_LENGTH  # int(2*NEEDLE_LENGTH+1)
-        
-        OBSERVE_POLICY = "lesion-centre"  
+
+        OBSERVE_POLICY = "lesion-centre"
         OBSERVE_STEPSIZE = 5
         # OBSERVE_MOVE = 'nb27' # 'nb8'
 
@@ -309,7 +315,9 @@ class NeedleGuide:
                             indexing="ij",
                         ),
                         dim=3,
-                    ).to(device)[..., [2, 1, 0]]  # ijk -> xyz
+                    ).to(device)[
+                        ..., [2, 1, 0]
+                    ]  # ijk -> xyz
                     + self.grid_centre[n].view(1, 1, 1, 3)
                     for n in range(batch_size)
                 ],
@@ -339,7 +347,9 @@ class NeedleGuide:
                                 indexing="ij",
                             ),
                             dim=3,
-                        ).to(device)[..., [2, 1, 0]]  # ijk -> xyz
+                        ).to(device)[
+                            ..., [2, 1, 0]
+                        ]  # ijk -> xyz
                         + self.grid_centre[n].view(1, 1, 1, 3)
                         for n in range(batch_size)
                     ],
@@ -406,14 +416,14 @@ class NeedleGuide:
                         ],
                         dim=1,
                     )
-                    ccl_all = needle_sampled_all.sum(dim=2)  # needle_length 
+                    ccl_all = needle_sampled_all.sum(dim=2)  # needle_length
                     self.ccl_sampled, needle_sampled_idx_flat = ccl_all.view(
                         world.batch_size, -1
                     ).max(dim=1)
                     needle_sampled_idx = (
                         ccl_all == self.ccl_sampled.view(world.batch_size, 1, 1, 1)
                     ).nonzero()
-                    #TODO: potentially multiple locations
+                    # TODO: potentially multiple locations
                     self.sample_x[
                         needle_sampled_idx[:, 0], needle_sampled_idx[:, 3]
                     ] = True
