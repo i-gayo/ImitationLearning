@@ -18,14 +18,14 @@ import gym
 
 #Processes for multi-env processing 
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecFrameStack
-from utils import * # _data import *
+from utils.utils import * # _data import *
 from stable_baselines3.common.policies import ActorCriticPolicy
 
 #Importing module functions 
-from Prostate_dataloader import *
-from Biopsy_env import TemplateGuidedBiopsy_penalty
+from utils.Prostate_dataloader import *
+from envs.Biopsy_env import TemplateGuidedBiopsy_penalty
 import random 
-from networks_il import *
+from networks.networks_il import *
 
 #Arg parse functions 
 parser = argparse.ArgumentParser(prog='train',
