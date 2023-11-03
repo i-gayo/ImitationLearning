@@ -16,7 +16,7 @@ To train imitation learning code, run the following scripts:
 
 To run RL code, run the following scripts:
 
-'python train_rl.py' 
+`python train_rl.py`
 
 ## Evaluation: 
 
