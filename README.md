@@ -1,17 +1,26 @@
-# ImitationLearning
-Repo for imitation learning code used for biopsy procedures 
+# ImitationLearning and ReinforcementLearning for Prostate Biopsy 
 
-## The following scripts are to be used in order: 
-1. Run write_labels.py to obtain labels to be used for imitation learning strategy 
-2. Run train_script.py to train imitation learning network 
+An open source repository for implementing Imitation Learning (IL) and Reinforcement Learning (RL) to learn needle sample strategies for prostate biopsy procedures. 
 
-## Script contents 
-- writing_labels.py (IL) : obtains paired observation-action labels at each time step 
-- utils.py (IL) : helper functions for training networks for imitation learning 
-- networks.py (IL) : UNet and Imitation learning networks to be used for training 
-- train_script.py (IL) : used to train imitation learning networks based on RL-defined networks 
-- train_script_timestep.py (IL) : previous script used for training, using networks defined in networks.py file 
+## Conda environment creation 
 
-- Biospy_env.py (RL) : environment used for RL 
-- Prostate_adataloader (RL) : dataloader used to extract prostate datasets for RL environment construction 
-- rl_utils.py (RL) : helper functions for training RL networks 
+To install the needed dependencies for this work, run the following command:
+
+`conda env create -f environment.yml`
+
+## Training: 
+
+To train imitation learning code, run the following scripts: 
+
+`python train_il.py`
+
+To run RL code, run the following scripts:
+
+`python train_rl.py`
+
+## Evaluation: 
+
+To evaluate the performance of the trained models (either IL or RL), run the following scripts: 
+
+`python evaluate_models.py`
+
