@@ -3,8 +3,8 @@ from torch import nn
 from torch.nn import functional as F
 
 # Import helper functions from vit and efficient network libraries 
-from utils_efficient import * 
-from utils_vit import * 
+from networks.utils_efficient import * 
+from networks.utils_vit import * 
 
 class EfficientNet3D(nn.Module):
 
