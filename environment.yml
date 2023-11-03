@@ -1,4 +1,4 @@
-name: il_env
+name: biopsy_rl
 dependencies:
   - numpy
   - pandas
