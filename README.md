@@ -1,4 +1,4 @@
-# ImitationLearning
+# ImitationLearning and ReinforcementLearning for Prostate Biopsy 
 
 An open source repository for implementing Imitation Learning (IL) and Reinforcement Learning (RL) to learn needle sample strategies for prostate biopsy procedures. 
 
