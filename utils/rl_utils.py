@@ -23,7 +23,7 @@ from stable_baselines3.common import results_plotter
 from stable_baselines3.common.logger import Figure
 import numpy as np 
 import os
-from Prostate_dataloader import * 
+from utils.Prostate_dataloader import * 
 
 class ImageReader:
 

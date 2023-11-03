@@ -6,7 +6,7 @@ import pandas as pd
 import os 
 import h5py
 import torch 
-from networks import * 
+from networks.networks import * 
 from torch.utils.tensorboard import SummaryWriter
 
 
@@ -1462,7 +1462,7 @@ if __name__ == '__main__':
     train_dl = DataLoader(train_ds, batch_size = 32, shuffle = True)
     grid, actions = train_ds[0]
 
-    from networks import * 
+    from networks.networks import * 
     model = ImitationNetwork()
     test_output = model(grid)
     test = train_ds[0]
