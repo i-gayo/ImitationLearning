@@ -10,15 +10,15 @@ from supersuit import frame_stack_v1
 
 #Processes for multi-env processing 
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecFrameStack
-from utils_data import *
+from utils.utils import *
 from stable_baselines3.common.policies import ActorCriticPolicy
 from typing import Callable, Tuple 
 
 #Importing module functions 
-from Prostate_dataloader import *
+from utils.Prostate_dataloader import *
 #from multipatient_env_v3 import TemplateGuidedBiopsy
-from Biopsy_env_single import TemplateGuidedBiopsy_single
-from Biopsy_env_final import TemplateGuidedBiopsy_bug 
+#from env.Biopsy_env_single import TemplateGuidedBiopsy_single
+from envs.Biopsy_env import TemplateGuidedBiopsy
 
 from stable_baselines3.common.callbacks import EvalCallback
 from stable_baselines3.common.utils import set_random_seed

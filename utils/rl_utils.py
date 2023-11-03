@@ -10,10 +10,6 @@ import torchvision
 from torchvision.models import resnet18 
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from torch.utils.data import Dataset, DataLoader, RandomSampler 
-import h5py
-
-import copy
-import matplotlib
 import ast
 
 from stable_baselines3.common.monitor import Monitor
@@ -21,8 +17,6 @@ from stable_baselines3.common.callbacks import BaseCallback, EventCallback
 from stable_baselines3.common.results_plotter import load_results, ts2xy
 from stable_baselines3.common import results_plotter
 from stable_baselines3.common.logger import Figure
-import numpy as np 
-import os
 from utils.Prostate_dataloader import * 
 
 class ImageReader:
@@ -164,19 +158,28 @@ class LabelLesions:
 
 class Image_dataloader(Dataset):
 
-    def __init__(self, folder_name, csv_file, mode = 'train', use_all = False):
+    def __init__(self, folder_name, csv_file = '/raid/candi/Iani/Biopsy_RL/patient_data_multiple_lesions.csv', mode = 'train', use_all = True):
         
         self.folder_name = folder_name
         self.mode = mode
-        self.csv_file = csv_file
         #self.rectum_df = pd.read_csv(rectum_file)
         #self.all_file_names = self._get_patient_list(os.path.join(self.folder_name, 'lesion'))
 
         # Obtain list of patient names with multiple lesions -> change to path name
-        df_dataset = pd.read_csv(csv_file)
+        #df_dataset = pd.read_csv('./patient_data_multiple_lesions.csv')
         #df_dataset = pd.read_csv('/Users/ianijirahmae/Documents/PhD_project/MRes_project/Reinforcement Learning/patient_data_multiple_lesions.csv')
+            # Find which patient indeces have more than 6 lesions 
+        df_dataset = pd.read_csv(csv_file)
+        patients_w5 = np.where(df_dataset[' num_lesions'] >= 5)[0] # save these indices for next time!!!
+    
+        # Remove patients where lesions >5 as these are incorrectly labelled!!
+        df_dataset = df_dataset.drop(df_dataset.index[patients_w5])
         self.all_file_names = df_dataset['patient_name'].tolist()
         self.num_lesions = df_dataset[' num_lesions'].tolist()
+        
+        # Write to new csv file 
+        df_dataset.to_csv('/raid/candi/Iani/Biopsy_RL/Updated_patients.csv')
+        
 
         # Train with all patients 
         if use_all:
@@ -191,6 +194,13 @@ class Image_dataloader(Dataset):
             self.train_names = self.all_file_names[0:train_len]
             self.val_names = self.all_file_names[train_len:train_len + val_len]
             self.test_names = self.all_file_names[train_len + val_len:]
+            
+            if self.mode == 'train':
+                self.all_num_lesions = self.num_lesions[0:train_len]
+            elif self.mode == 'val':
+                self.all_num_lesions = self.num_lesions[train_len:train_len + val_len]
+            else:
+                self.all_num_lesions = self.num_lesions[train_len + val_len:]
 
         # Only train with 105 patients, validate with 15 and validate with 30 : all ahve mean num lesions of 2.6
         else:
@@ -240,15 +250,6 @@ class Image_dataloader(Dataset):
 
         return normalised_img.astype(np.float32)
 
-    def _get_rectum_pos(self, patient_name):
-        
-        # Finding x,y,z of values with file name 
-        #patient_name = 'Patient482687956_study_0.nii.gz' 
-        patient_data = self.rectum_df[self.rectum_df['file_name'].str.contains(patient_name)]
-        rectum_pos = [patient_data[pos].values[0] for pos in ['x', 'y', 'z']] 
-        
-        return rectum_pos 
-
     def __len__(self):
         return self.dataset_len[self.mode]
  
@@ -276,21 +277,31 @@ class Image_dataloader(Dataset):
         
         # Get rectum positions
         #rectum_pos = self._get_rectum_pos(patient_name) 
-        rectum_pos = 0 
+        rectum_pos = self.all_num_lesions[idx] # return as number of lesions 
         sitk_img_path = os.path.join(self.lesion_folder, patient_name)
 
         return mri_vol, prostate_mask, lesion_mask, sitk_img_path , rectum_pos, patient_name
 
 class Image_dataloader_single(Dataset):
 
-    def __init__(self, folder_name, rectum_file, idx = 0, mode = 'train'):
+    def __init__(self, folder_name, csv_file = '/raid/candi/Iani/Biopsy_RL/patient_data_multiple_lesions.csv', idx = 0, mode = 'train'):
         
         self.folder_name = folder_name
         self.mode = mode
-        self.rectum_file = rectum_file 
-        self.rectum_df = pd.read_csv(rectum_file)
-        self.all_file_names = self._get_patient_list(os.path.join(self.folder_name, 'lesion'))
+        #self.rectum_file = rectum_file 
+        #self.rectum_df = pd.read_csv(rectum_file)
+        #self.all_file_names = self._get_patient_list(os.path.join(self.folder_name, 'lesion'))
         self.idx = idx
+        
+        df_dataset = pd.read_csv(csv_file)
+        
+        #Filter out patients >=5 lesions 
+        patients_w5 = np.where(df_dataset[' num_lesions'] >= 5)[0] # save these indices for next time!!!
+    
+        # Remove patients where lesions >5 as these are incorrectly labelled!!
+        df_dataset = df_dataset.drop(df_dataset.index[patients_w5])
+        self.all_file_names = df_dataset['patient_name'].tolist()
+        self.num_lesions = df_dataset[' num_lesions'].tolist()
         
         #Defining length of datasets
         size_dataset = len(self.all_file_names)
@@ -329,16 +340,6 @@ class Image_dataloader_single(Dataset):
         normalised_img =  ((img - min_img)/(max_img - min_img)) 
 
         return normalised_img.astype(np.float)
-
-    def _get_rectum_pos(self, patient_name):
-        
-        # Finding x,y,z of values with file name 
-        #patient_name = 'Patient482687956_study_0.nii.gz' 
-        patient_data = self.rectum_df[self.rectum_df['file_name'].str.contains(patient_name)]
-        #print(f"patient data : {patient_data}")
-        rectum_pos = [patient_data[pos].values[0] for pos in ['x', 'y', 'z']] 
-        
-        return rectum_pos 
 
     def __len__(self):
         return self.dataset_len[self.mode]
@@ -527,7 +528,6 @@ class SimpleFeatureExtractor_3D_continuous(BaseFeaturesExtractor):
 
             # Apply pooling layer in between 
             nn.MaxPool3d(kernel_size = 3, stride = 2, padding = 1),
-
             nn.Conv3d(64, 128, kernel_size=3, stride=1),
             nn.BatchNorm3d(128),
             nn.ReLU()
@@ -561,7 +561,9 @@ class SimpleFeatureExtractor_3D_continuous(BaseFeaturesExtractor):
         A function that switches the dimension of image from row x col x channel -> channel x row x colmn 
         and addeds a dimension along 0th axis to fit network 
         """ 
-        image = images.clone().detach().to(torch.uint8)#.squeeze()
+        image = images.clone().detach().to(torch.uint8).squeeze()
+        if len(image.size()) == 3:
+            image = image.unsqueeze(axis=0)
         split_channel_image = torch.cat([torch.cat([image[j,:,:,i*25:(i*25)+25].unsqueeze(0) for i in range(3)]).unsqueeze(0) for j in range(image.size()[0])])#.clone().detach().to(torch.uint8)
         #split_channel_image = torch.cat([torch.cat(torch.tensor_split(image[i,:,:,:].unsqueeze(0), self.num_multiple_frames, dim=3)).unsqueeze(0) for i in range(image.size()[0])])
         #processed_image = image.permute(0, 3,2,1)
@@ -639,8 +641,8 @@ class SimpleFeatureExtractor_3D(BaseFeaturesExtractor):
         and addeds a dimension along 0th axis to fit network 
         """
         image = images.clone().detach().to(torch.uint8)
-        #split_channel_image2 = torch.cat([torch.cat([image[j,:,:,i*25:(i*25)+25].unsqueeze(0) for i in range(3)]).unsqueeze(0) for j in range(image.size()[0])])#.clone().detach().to(torch.uint8)
-        split_channel_image = torch.cat([torch.cat(torch.tensor_split(image[i,:,:,:].unsqueeze(0), self.num_multiple_frames, dim=3)).unsqueeze(0) for i in range(image.size()[0])])
+        split_channel_image = torch.cat([torch.cat([image[j,:,:,i*25:(i*25)+25].unsqueeze(0) for i in range(3)]).unsqueeze(0) for j in range(image.size()[0])])#.clone().detach().to(torch.uint8)
+        #split_channel_image = torch.cat([torch.cat(torch.tensor_split(image[i,:,:,:].unsqueeze(0), self.num_multiple_frames, dim=3)).unsqueeze(0) for i in range(image.size()[0])])
         #processed_image = image.permute(0, 3,2,1)
         #processed_image = torch.unsqueeze(processed_image, dim= 0)
         
