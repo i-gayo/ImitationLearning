@@ -1,6 +1,6 @@
 # ImitationLearning
 
-An open source repository for implementing Reinforcement Learning (RL) and Imitation Learning (IL) to learn needle sample strategies for prostate biopsy procedures. 
+An open source repository for implementing Imitation Learning (IL) and Reinforcement Learning (RL) to learn needle sample strategies for prostate biopsy procedures. 
 
 ## Conda environment creation 
 
