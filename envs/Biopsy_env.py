@@ -12,7 +12,7 @@ from supersuit import frame_stack_v1
 from stable_baselines3.common.utils import set_random_seed
 from stable_baselines3.common.vec_env.base_vec_env import VecEnvWrapper
 
-from utils.rl_utils import *
+from utils.utils import *
 #Import all dataloader functions 
 from utils.Prostate_dataloader import * 
 from stable_baselines3.ppo.policies import CnnPolicy#, MultiInputPolicy
@@ -21,9 +21,7 @@ import torch
 import time 
 
 from PIL import Image, ImageDraw, ImageFont
-
-import matplotlib
-#matplotlib.use("TkAgg")
+from utils.deform_utils import * 
 from matplotlib import pyplot as plt
 
 def compute_needle_efficiency(num_needles_hit, num_needles_fired):
@@ -39,7 +37,10 @@ def round_to_05(val):
     A function that rounds to the nearest 5mm
     """
     #rounded_05 = round(val * 2) / 2
-    rounded_05 = 5 * round(val / 5)
+    if torch.is_tensor(val):
+      rounded_05 = 5 * torch.round(val / 5)
+    else:
+      rounded_05 = 5 * round(val / 5)
     return rounded_05
 
 def online_compute_coef(x_n1, y_n1, xbar = 0, ybar = 0, Nn = 0, Dn=0, En=0, n=0):
@@ -86,26 +87,26 @@ def add_num_needles_left(grid_array, num_needles_left):
 
   return normalised_img 
 
-class TemplateGuidedBiopsy_penalty(gym.Env):
-    """Custom Environment that follows gym interface"""
+class TemplateGuidedBiopsy(gym.Env):
+    """Biopsy environment for multiple patients, observing only single lesions at a time """
+
     metadata = {'render.modes': ['human']}
 
-    def __init__(self, DataSampler, obs_space = 'images', results_dir = 'test', env_num = '1', reward_fn = 'penalty', \
+    def __init__(self, DataSampler, obs_space = 'images', results_dir = 'test', env_num = '1', reward_fn = 'ccl', \
     miss_penalty = 2, terminating_condition = 'max_num_steps', train_mode = 'train', device = 'cpu', max_num_steps = 100, \
-      penalty = 5, reward_magnitudes = [1/3, 1/3, 1/3], start_centre = False, inc_HR = True, inc_CCL = False):
+      penalty = 5, deform = True, deform_scale = 0.1, deform_rate = 0.25, start_centre = False, tre = 3):
 
         """
         Actions : delta_x, delta_y, z (fire or no fire or variable depth)
         """
-        super(TemplateGuidedBiopsy_penalty, self).__init__()
+        super(TemplateGuidedBiopsy_bug, self).__init__()
 
         self.obs_space = obs_space
 
         ## Defining action and observation spaces
         self.action_space = spaces.Box(low = -1, high= 1, shape = (3,), dtype = np.float32)
 
-        #if obs_space == 'images':
-        self.observation_space = spaces.Box(low=0.0, high=1.0, shape=(100, 100, 25), dtype=np.float64)
+        self.observation_space = spaces.Box(low=0.0, high=1.0, shape=(5, 100, 100, 24), dtype=np.float64)
 
         # Load dataset sampler 
         self.DataSampler = DataSampler
@@ -117,7 +118,7 @@ class TemplateGuidedBiopsy_penalty(gym.Env):
         self.done = False 
         self.reward_fn = reward_fn
         self.num_needles = 0 
-        self.max_num_needles = 4 * self.num_lesions
+        self.max_num_needles = 4 #* self.num_lesions
         self.num_needles_per_lesion = np.zeros(self.num_lesions)
         self.all_ccl = [] 
         self.all_sizes = []
@@ -128,26 +129,29 @@ class TemplateGuidedBiopsy_penalty(gym.Env):
         self.previous_ccl_corr = 0
         self.hit_rate_threshold = 0.6
         self.previous_ccl_online = 0 
-        self.reward_magnitudes = reward_magnitudes
         self.penalty_reward = penalty 
         self.terminating_condition = terminating_condition
         self.needle_penalty = miss_penalty
         self.start_centre = start_centre
+        self.deform = deform 
+        self.deform_rate = deform_rate
+        self.deform_scale = deform_scale 
+        self.tre = tre 
+        
+        # Defining deformation transformer to use
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.random_transform = GridTransform(grid_size=[8,8,4], interp_type='linear', volsize=[100,100,24], batch_size=1, device=device)
 
-        # Reward including factors
-        self.inc_HR = inc_HR
-        self.inc_CCL = inc_CCL 
 
         # Initialise state
-        initial_obs, starting_pos = self.initialise_state(img_data, start_centre)
+        initial_obs, starting_pos, current_pos = self.initialise_state(img_data, start_centre)
+        self.current_obs = initial_obs 
 
         # Save starting pos for next action movement 
-        self.current_needle_pos = starting_pos 
-
-        # If not just using images, concatenate num needles left to obs space 
-        #if self.obs_space != 'images':
-        #  initial_obs = {'img_volume': initial_obs, 'num_needles_left' : self.max_num_needles - self.num_needles}
+        self.current_needle_pos = starting_pos # x and y only; 
+        self.current_pos = current_pos # x,y,z depth current poss 
         
+
         # Correlation statistics
         self.r = 0
         self.xbar = 0
@@ -159,11 +163,11 @@ class TemplateGuidedBiopsy_penalty(gym.Env):
 
         # Statistics about data 
         if train_mode == 'train':
-            self.num_data = 105 #402
+            self.num_data = 402 # 105
         elif train_mode == 'test':
-            self.num_data = 30 #115
+            self.num_data = 115 # 30 
         else:
-            self.num_data = 15 #58
+            self.num_data = 58 # 15
 
         # Add a patient counter 
         self.patient_counter = 0 
@@ -201,38 +205,39 @@ class TemplateGuidedBiopsy_penalty(gym.Env):
         #if self.patient_name[0] == 'Patient479592532_study_1.nii.gz':
         #  print(f"Step count : {self.step_count}")
 
-        # 1. Convert z from fire, no fire 
-        fire_prob = (action[2] + 1) / 2 # convert from (-1,1) to (0,1)
-        #needle_fired = fire_prob >= 0.5 
-        needle_fired = action[2] > 0
-
-        # 2. Move current template pos according to action_x, action_y -> DOUBLE CHECK THIS 
+        ### 1. Un-normalise actions : normalised between (-1,1)
+        z_unnorm = action[2] + 1 #un-normalise from (-1,1) -> 0,2 where 0 is non-fired, 1 is apex, 2 is base 
+        if z_unnorm <= -0.33: 
+          needle_fired = False
+          z_depth = 0 
+        elif ((z_unnorm > -0.33) and (z_unnorm <= 0.33)): # apex
+          needle_fired = True 
+          z_depth = 1
+        else: # base 
+          needle_fired = True 
+          z_depth = 2 
+    
+        ### 2. Move current template pos according to action_x, action_y -> DOUBLE CHECK THIS 
         grid_pos, same_position, moves_off_grid = self.find_new_needle_pos(action[0], action[1])
         self.current_needle_pos = grid_pos 
+        
+        # Append z depth to current pos
+        self.current_pos = np.append(copy.deepcopy(grid_pos), z_depth)
 
-        # 3. Update state, concatenate grid_pos to image volumes 
-        new_grid_array = self.create_grid_array(grid_pos[0], grid_pos[1], needle_fired, self.grid_array, display_current_pos = True)
+        ### 3. Update state, concatenate grid_pos to image volumes 
+        new_obs = self.obtain_new_obs(self.current_pos)
+        self.current_obs = new_obs 
 
-        # 4. Compute CCL if needle fired and append to list of CCL_coeff
+        #new_grid_array = self.create_grid_array(grid_pos[0], grid_pos[1], needle_fired, self.grid_array, display_current_pos = True)
+
+        ### TODO: CHAGNE REWARD , CCL AND HR 
+
+        ### 4. Compute reward and CCL if needle fired and append to list of CCL_coeff
         needle_hit = False 
-
-        # 4. Obtain needle sample trajectory, compute CCL using ground truth masks
-        needle_traj = self.compute_needle_traj(grid_pos[0], grid_pos[1]) #note grid_pos[0] and grid_pos[1] need to correspond to image coords
-        ccl, lesion_idx = self.compute_ccl(needle_traj)
-
-        # For computing if a new lesion was hit by needle -> exploration reward!!! 
-        if lesion_idx != None:
-          # np.any is used to account for when multiple lesions are hit!! 
-          new_lesion_hit = np.any((self.num_needles_per_lesion[lesion_idx] == 0)) 
-
-        # None means no lesions were hit, so new lesions hit 
-        else:
-          new_lesion_hit = False 
 
         if needle_fired:
 
             self.num_needles += 1
-
 
             # Check if previously fired here or not 
             fired_same_position = (self.firing_grid[grid_pos[1]  + 50, grid_pos[0] + 50] == 1)
@@ -246,39 +251,43 @@ class TemplateGuidedBiopsy_penalty(gym.Env):
             self.firing_grid[y_grid_pos, x_grid_pos:x_grid_pos + 2 ] = 1
             self.firing_grid[y_grid_pos, x_grid_pos - 1 : x_grid_pos] = 1
 
+            # 4. Obtain needle sample trajectory, compute CCL using ground truth masks
+            needle_traj, intersect_vol, ground_truth_z = self.compute_needle_traj(grid_pos[0], grid_pos[1], z_depth) #note grid_pos[0] and grid_pos[1] need to correspond to image coords
+            ccl, ccl_approx, max_ccl = self.compute_ccl(intersect_vol)
+            norm_ccl = ccl / max_ccl #normalised ccl
 
-
-            # If two lesions were hit by the same needle, append each ccl and size separately
-            two_lesions_hit = (type(ccl) == list)
-
-            if two_lesions_hit:
-              
-              for i in range(len(ccl)):
-                self.all_ccl.append(ccl[i])
-                self.all_sizes.append(self.tumour_statistics['lesion_size'][lesion_idx[i]])
-                self.num_needles_per_lesion[lesion_idx[i]] += 1
-              
-              #Increase successful needle count
-              self.num_needles_hit +=1 
-              needle_hit = True 
-
-            # If one or no lesions were hit by needle 
-            else: 
-
-              self.all_ccl.append(ccl)
+            # only add ccl to fired needles; don't consider non-fired needles 
+            self.all_ccl.append(ccl)
+            self.all_norm_ccl.append(norm_ccl)
             
-              # No lesion therefore no lesion size 
-              if lesion_idx == None:
-                  self.all_sizes.append(0)
+            ## Only considering single lesions, so no need to do single 
+            # # If two lesions were hit by the same needle, append each ccl and size separately
+            # two_lesions_hit = (type(ccl) == list)
 
-              # Single lesion 
-              else:
-                  self.all_sizes.append(self.tumour_statistics['lesion_size'][lesion_idx])
-                  self.num_needles_per_lesion[lesion_idx] += 1
-                  
-                  #Increase successful needle count
-                  self.num_needles_hit +=1 
-                  needle_hit = True
+            # if two_lesions_hit:
+              
+            #   for i in range(len(ccl)):
+            #     self.all_ccl.append(ccl[i])
+            #     self.all_sizes.append(self.tumour_statistics['lesion_size'][lesion_idx[i]])
+            #     self.num_needles_per_lesion[lesion_idx[i]] += 1
+              
+            #   #Increase successful needle count
+            #   self.num_needles_hit +=1 
+            #   needle_hit = True 
+
+            # No lesion hit therefore no lesion size 
+            if ccl == 0:
+                self.all_sizes.append(0)
+                needle_hit = False 
+
+            else:
+                needle_hit = True 
+                self.all_sizes.append(self.tumour_statistics['lesion_size'][self.lesion_idx])
+                self.num_needles_per_lesion[self.lesion_idx] += 1
+              
+                #Increase successful needle count
+                self.num_needles_hit +=1 
+                needle_hit = True
           
             # Compute CCL coefficient online 
             n_val = len(self.all_ccl)
@@ -295,38 +304,51 @@ class TemplateGuidedBiopsy_penalty(gym.Env):
         else:
             # No needle fired, so no ccl obtained
             ccl = 0  
+            needle_hit = False 
+            norm_ccl = 0
 
             #Use previous ccl correlation as no update to ccl values 
             ccl_corr_online = self.previous_ccl_online   
             needle_hits_outside_prostate = False 
-
+            needle_traj, intersect_vol, ground_truth_z = self.compute_needle_traj(grid_pos[0], grid_pos[1], z_depth)
             needle_traj = np.zeros_like(self.img_data['mri_vol'])
         
         # Add number of needles left as additional info 
 
         needles_left = self.max_num_needles - self.num_needles
-        new_grid_array = add_num_needles_left(new_grid_array, needles_left)
+        #new_grid_array = add_num_needles_left(new_grid_array, needles_left)
           
         #new_obs = self.obtain_obs(new_grid_array)
-        new_obs = self.obtain_obs_needle(new_grid_array, needle_traj)
+        #new_obs = self.obtain_obs_wneedle(new_grid_array, needle_traj)
 
-        # 5. Check if episode terminates episode if hit rate threshold is reached or max_num_steps is reached 
+        ### 5. Check if episode terminates episode if hit rate threshold is reached or max_num_steps is reached 
         
         # Commpute statistics 
-        all_lesions_hit = np.all(self.num_needles_per_lesion >= 1)
-        agent_hit_rate = np.mean((self.num_needles_per_lesion >= 2)) # how many lesions are hit at least twice 
-        hit_threshold_reached = agent_hit_rate >= self.hit_rate_threshold # if hit rate threshold is reached 
-        max_num_needles_fired = (self.num_needles >= self.max_num_needles) 
+        #all_lesions_hit = np.all(self.num_needles_per_lesion >= 1)
+        if self.num_needles == 0:
+          hr = 0 
+        else: 
+          hr = self.num_needles_hit / self.num_needles # how many needles fired hit lesion 
+
+        hit_threshold_reached = (self.num_needles_hit >= self.max_num_needles) # when num needles hit lesion > 4 
+        max_num_needles_fired = (self.num_needles >= self.max_num_needles)  # when num needles fired > 4
         max_num_steps_reached = (self.step_count >= self.max_num_steps_terminal) 
+        more_than_5 = self.num_needles_per_lesion[self.lesion_idx] >= 5 # if more htan 5 needles hit, terminate episode 
+
+        #agent_hit_rate = np.mean((self.num_needles_per_lesion >= 2)) # how many lesions are hit at least twice 
+        #hit_threshold_reached = agent_hit_rate >= self.hit_rate_threshold # if hit rate threshold is reached 
+        #max_num_needles_fired = (self.num_needles >= self.max_num_needles) 
+        #max_num_steps_reached = (self.step_count >= self.max_num_steps_terminal) 
         #max_num_steps_reached = (self.step_count >= (self.max_num_needles + 10)) 
 
         # Compute efficiency 
         if self.num_needles == 0:
           efficiency = 0 
+          hr = 0 
         else:
           efficiency = self.num_needles_hit / self.num_needles
-
-        
+          hr = self.num_needles_hit / self.num_needles
+          
         # Terminate depending on whether max num steps are reached OR if hit threshold is reached 
         if self.terminating_condition == 'max_num_steps':
           terminate = max_num_steps_reached 
@@ -334,6 +356,8 @@ class TemplateGuidedBiopsy_penalty(gym.Env):
           terminate = max_num_steps_reached or hit_threshold_reached 
         elif self.terminating_condition == 'max_num_needles_fired':
           terminate = max_num_steps_reached or max_num_needles_fired
+        else: 
+          terminate = max_num_steps_reached or more_than_5
 
         if terminate: #or hit_threshold_reached:
             done_new_patient = True 
@@ -351,49 +375,24 @@ class TemplateGuidedBiopsy_penalty(gym.Env):
           plt.close()
 
         # 6. Compute reward function 
-        if self.reward_fn == 'patient':
-            reward =  self.compute_reward_ccl_sum(done_new_patient, ccl_corr_online, agent_hit_rate, efficiency, same_position = same_position, moves_off_grid = moves_off_grid, magnitude = self.reward_magnitudes)
-        elif self.reward_fn == 'patient_b':
-            reward =  self.compute_reward_ccl_multiply(done_new_patient, ccl_corr_online, agent_hit_rate, self.num_needles, same_position = same_position, moves_off_grid = moves_off_grid)
+
+        #reward = self.compute_reward_simple_reward(done_new_patient, ccl_corr_online, agent_hit_rate, needle_fired, needle_hit, max_num_needles_fired, same_position, moves_off_grid)
+        if self.reward_fn == 'classify_reward':
+          reward = self.compute_reward_classify(needle_fired, needle_hit, needle_hits_outside_prostate, ground_truth_z, z_depth)
         elif self.reward_fn == 'penalty':
-            reward = self.compute_reward_ccl_penalty(done_new_patient, ccl_corr_online, agent_hit_rate, needle_fired, needle_hit, max_num_needles_fired, same_position, moves_off_grid)
+          reward = self.compute_reward_penalty(needle_fired, needle_hit, needle_hits_outside_prostate, ground_truth_z, z_depth, terminate)
         elif self.reward_fn == 'reward':
-            reward = self.compute_reward_ccl_reward(done_new_patient, ccl_corr_online, agent_hit_rate, needle_fired, needle_hit, max_num_needles_fired, same_position, moves_off_grid)
-        elif self.reward_fn == 'reward_smallpenalty':
-            reward = self.compute_reward_ccl_reward_smallpenalty(done_new_patient, ccl_corr_online, agent_hit_rate, needle_fired, needle_hit, max_num_needles_fired, same_position, moves_off_grid, penalty = self.penalty_reward)
-        elif self.reward_fn == 'reward_hit_rate':
-            reward = self.compute_reward_hit_rate(done_new_patient, ccl_corr_online, agent_hit_rate, needle_fired, needle_hit, max_num_needles_fired, same_position, moves_off_grid, miss_penalty = self.needle_penalty , penalty = self.penalty_reward)
-        elif self.reward_fn == 'ccl_coeff':
-            reward = self.compute_reward_ccl(done_new_patient, ccl_corr_online, agent_hit_rate, needle_fired, needle_hit, max_num_needles_fired, same_position, moves_off_grid, miss_penalty = self.needle_penalty , penalty = self.penalty_reward)
-        elif self.reward_fn == 'simple':
-          reward = self.compute_reward_simple_reward(done_new_patient, ccl_corr_online, agent_hit_rate, needle_fired, needle_hit, max_num_needles_fired, same_position, moves_off_grid, inc_HR = self.inc_HR, inc_CCL = self.inc_CCL)
-        elif self.reward_fn == 'ccl_only':
-          reward = self.compute_reward_ccl_only(done_new_patient, ccl_corr_online, agent_hit_rate, needle_fired, needle_hit, max_num_needles_fired, same_position, moves_off_grid, inc_HR = self.inc_HR, inc_CCL = self.inc_CCL)
-        elif self.reward_fn == 'BASIC':
-          reward = self.compute_reward_BASIC(needle_fired, needle_hit, penalty_reward = 10)
-        elif self.reward_fn == 'BASIC_20':
-          reward = self.compute_reward_BASIC_20(needle_fired, needle_hit, penalty_reward = 10)
-        elif self.reward_fn == 'BASIC_FIRED':
-          reward = self.compute_reward_BASIC_FIRED(needle_fired, needle_hit, done_new_patient, penalty_reward = 10)
+          reward = self.compute_reward(needle_fired, needle_hit, needle_hits_outside_prostate)
+        else:
+          # compute based on metrics 
+          reward = self.compute_reward_metrics(hr, needle_fired, needle_hit, needle_hits_outside_prostate, terminate, self.reward_fn)
 
-
-
-        ### Additional rewards : 
-
-        # Check if needle hits OUTSIDE prostate, apply additional penalty of -5 
-        prostate_penalty = -10
-        
-        if needle_hits_outside_prostate:
-          reward += prostate_penalty 
-
-        # Check if new lesion explored / new area explored -> add bonus reward!!!
-        #lesion_exploration_reward = 10
-        #if new_lesion_hit: 
-        #  reward += lesion_exploration_reward 
-        
         # Save ccl_corr as new previous_ccl_corr
         self.previous_ccl_corr = ccl_corr_online
-
+        scaled_lesion_centre = (self.tumour_centroids[self.lesion_idx] + self.prostate_centroid) * np.array([0.5, 0.5, 0.25]) - np.array([50, 50, 0])
+        print(f"Needle hit : {needle_hit} Reward : {reward} \n \
+              Lesion centre : {scaled_lesion_centre} POSITION : {self.current_pos} Action: {action}")
+        
         # 6. Compute saving statistics and actions print(f"Reward : {reward}")
         saved_actions = np.array([grid_pos[0], grid_pos[1], self.max_needle_depth*int(needle_fired), reward])
 
@@ -401,10 +400,16 @@ class TemplateGuidedBiopsy_penalty(gym.Env):
           np.savetxt(fp, np.reshape(saved_actions, [1,-1]), '%s', ',')
 
         info = {'num_needles_per_lesion' : self.num_needles_per_lesion, 'all_ccl' : self.all_ccl,\
-             'all_lesion_size' : self.all_sizes, 'all_lesions_hit' : all_lesions_hit,
-             'ccl_corr' : ccl_corr_online, 'hit_rate' : agent_hit_rate, \
-               'new_patient' : done_new_patient, 'ccl_corr_online' : ccl_corr_online, 'efficiency' : efficiency,
-                'num_needles' : self.num_needles, 'max_num_needles' : self.max_num_needles, 'num_needles_hit' : self.num_needles_hit, 'firing_grid' : self.firing_grid}
+             'all_lesion_size' : self.all_sizes, 
+             'ccl_corr' : ccl_corr_online, 'hit_rate' : hr, \
+               'new_patient' : done_new_patient, 'ccl_corr_online' : ccl_corr_online, \
+                'efficiency' : efficiency,'num_needles' : self.num_needles, \
+                  'max_num_needles' : self.max_num_needles, 'num_needles_hit' : self.num_needles_hit, \
+                    'firing_grid' : self.firing_grid, 'hit_threshold_reached' : hit_threshold_reached, \
+                      'lesion_mask' : self.img_data['tumour_mask'],'current_pos' : self.current_pos,\
+                        'all_norm_ccl' : self.all_norm_ccl, 'norm_ccl' : norm_ccl, 'needle_hit' : needle_hit, 'lesion_centre' : scaled_lesion_centre,\
+                          'lesion_size' : self.tumour_statistics['lesion_size'][self.lesion_idx], 'lesion_idx' : self.lesion_idx, 'patient_name' : self.patient_name, 'ccl' : ccl}
+
 
         # Reset ccl statistics after going through entire dataset ie zero ccl and all_lesion_sizes
         if self.patient_counter  >= self.num_data:
@@ -412,19 +417,21 @@ class TemplateGuidedBiopsy_penalty(gym.Env):
             self.all_ccl = [] 
             self.all_sizes = [] 
             self.patient_counter = 0 
-            bonus_reward = 100 * ccl_corr_online
-            reward += bonus_reward 
+            #bonus_reward = 100 * ccl_corr_online
+            #reward += bonus_reward 
 
         return new_obs, reward, done_new_patient, info
 
     def reset_ccl_statistics(self):
         
         img_data = self.sample_new_data()
-        initial_obs, starting_pos = self.initialise_state(img_data, self.start_centre)
+        initial_obs, starting_pos, current_pos = self.initialise_state(img_data, self.start_centre)
+        self.current_obs = initial_obs
         #print(f"Starting pos : {starting_pos}")
 
         # Save starting pos for next action movement 
         self.current_needle_pos = starting_pos 
+        self.current_pos = current_pos
 
         # Defining variables 
         self.done = False 
@@ -433,6 +440,7 @@ class TemplateGuidedBiopsy_penalty(gym.Env):
         self.max_num_steps = 4 * self.num_lesions
         self.num_needles_per_lesion = np.zeros(self.num_lesions)
         self.all_ccl = [] 
+        self.all_norm_ccl = [] 
         self.all_sizes = [] 
         self.step_count = 0 
         self.patient_counter = 0 
@@ -462,25 +470,28 @@ class TemplateGuidedBiopsy_penalty(gym.Env):
     def reset(self):
         
         img_data = self.sample_new_data()
-        initial_obs, starting_pos = self.initialise_state(img_data, self.start_centre)
-
+        initial_obs, starting_pos, current_pos = self.initialise_state(img_data, self.start_centre)
+        self.current_obs = initial_obs
+        
         #if self.obs_space != 'images':
         #  initial_obs = {'img_volume': initial_obs, 'num_needles_left' : self.max_num_needles - self.num_needles}
         #print(f"Starting pos : {starting_pos}")
 
         # Save starting pos for next action movement 
         self.current_needle_pos = starting_pos 
+        self.current_pos = current_pos
 
         # Defining variables 
         self.done = False 
         self.num_needles = 0 
         self.num_needles_hit = 0 
         self.max_num_steps = 4 * self.num_lesions
-        self.max_num_needles = 4 * self.num_lesions
+        self.max_num_needles = 4 #* self.num_lesions
         self.num_needles_per_lesion = np.zeros(self.num_lesions)
         #self.all_ccl = [] 
         #self.all_sizes = [] 
         self.step_count = 0 
+        self.all_norm_ccl = [] 
         #self.timer_online = 0 
 
         #Add line to actions file to indicate a new environment has been started
@@ -499,8 +510,84 @@ class TemplateGuidedBiopsy_penalty(gym.Env):
     def close (self):
         pass 
 
-    """ Helper functions """
+    """ Helper functions """ 
 
+    def create_needle_vol(self, current_pos):
+
+      """
+      A function that creates needle volume 100 x 100 x 24 
+
+      Parameters:
+      -----------
+      current_pos : current position on the grid. 1 x 3 array delta_x, delta_y, delta_z ; assumes in the range of (-30,30) ie actions are multipled by 5 already 
+
+      Returns:
+      -----------
+      neeedle_vol : 100 x 100 x 24 needle vol for needle trajectory 
+
+      """
+      needle_vol = np.zeros([100,100,24])
+
+      x_idx = current_pos[0]#*5
+      y_idx = current_pos[1]#*5
+
+      #Converts range from (-30,30) to image grid array
+      x_idx = (x_idx) + 50
+      y_idx = (y_idx) + 50
+
+      x_grid_pos = int(x_idx)
+      y_grid_pos = int(y_idx)
+
+      depth_map = {0 : 1, 1 : int(0.5*self.max_depth), 2 : self.max_depth}
+      depth = depth_map[int(current_pos[2])]
+
+      needle_vol[y_grid_pos-1:y_grid_pos+ 2, x_grid_pos-1:x_grid_pos+2, 0:depth ] = 1
+
+      return needle_vol 
+
+    def obtain_new_obs(self, current_pos):
+      """
+      Obtains observations, given the new grid position 
+
+      Parameters:
+      ----------
+      current_pos : 3 x 1 array (x,y,z) where z is (0,1,2) where 0 i snon-fired, 1 is apex and 2 is base 
+      
+      Returns:
+      ----------
+      obs : 5 x 100 x 100 x 25 observations 
+      
+      """
+
+      needle_vol = self.create_needle_vol(current_pos)
+      
+      # Obtain old needle stack from T-2 : T
+      old_needle = self.current_obs[-3:,:,:,:]
+
+      # Replace needle stack. Move T-1 -> T-2, T -> T-1 and new needle as T
+      new_needle = torch.zeros_like(old_needle)
+      new_needle[0:2, :, :, :] = old_needle[1:, :,:, :]
+      new_needle[-1,:,:,:] = torch.tensor(needle_vol)
+
+      # Obtain new obs : replace needle stack with needle stack 
+      new_obs = copy.deepcopy(self.current_obs)
+      new_obs[-3:, :, :] = new_needle 
+      
+      # Deform previous observation 
+      if self.deform: 
+        #print(f"Deforming previous observation of lesion and obs")
+        lesion = new_obs[0,:,:,:]
+        prostate = new_obs[1,:,:,:]
+        organ_vol = torch.stack((lesion, prostate)).unsqueeze(0)
+        #organ_vol = torch.stack((torch.tensor(self.noisy_tumour_vol), torch.tensor(self.noisy_prostate_vol))).unsqueeze(0)
+        organ_vol = self.apply_deforms(organ_vol.to(torch.device("cuda")), self.deform_rate, self.deform_scale)
+        organ_vol.to(torch.device("cpu"))
+        organ_vol = organ_vol.cpu().squeeze().numpy()
+        organ_vol = np.swapaxes(organ_vol, 1, 3) # swap z and y axis 
+        new_obs[0:2,:,:,:] = torch.tensor(organ_vol)
+            
+      return new_obs
+      
     def obtain_obs(self, template_grid):
         """
         Obtains observations from current template grid array and stacks them 
@@ -521,33 +608,6 @@ class TemplateGuidedBiopsy_penalty(gym.Env):
         new_obs = np.concatenate([np.expand_dims(template_grid, axis = 2), combined_tumour_prostate], axis = 2)
         new_obs = new_obs * 0.5
 
-        return new_obs
-    
-
-    def obtain_obs_needle(self, template_grid, needle_mask):
-        
-        """
-        Obtains observations from current template grid array and stacks them 
-
-        Notes:
-        ----------
-        Down-samples and only obtains every 2 pixels for CNN efficiency 
-
-        """
-
-        needle_vol = needle_mask[0::2, 0::2, 0::4]
-        prostate_vol = self.noisy_prostate_vol[:, :, :] 
-        tumour_vol = self.noisy_tumour_vol[:, :, :]
-        combined_vol = np.zeros_like(needle_vol)
-
-        # Prostate : 0.25, Needle : 0.5, tumour : 0.75, tumour/needle : 1 
-        combined_vol[prostate_vol == 1] = 0.25
-        combined_vol[needle_mask[0::2, 0::2, 0::4] == 1] = 0.5 
-        combined_vol[tumour_vol == 1] = 0.75
-        combined_vol[(tumour_vol + needle_vol) == 2] = 1 
-
-        new_obs = np.concatenate([np.expand_dims(template_grid, axis = 2), combined_vol], axis = 2)
-        
         return new_obs
     
     def obtain_obs_wneedle(self, template_grid, needle_mask):
@@ -598,7 +658,9 @@ class TemplateGuidedBiopsy_penalty(gym.Env):
 
         #Obtain bounding box of prostate, tumour masks (for tumour this is a bounding sphere) 
         self.bb_prostate_mask, self.prostate_centroid = self._extract_volume_params(prostate_mask, which_case= 'Prostate')
-        self.max_needle_depth = np.max(np.where(self.img_data['prostate_mask'] == 1)[-1]) #max z depth with prostate present
+        self.max_needle_depth = np.max(np.where(self.img_data['prostate_mask'] == 1)[-1]) #max z depth with prostate present using whole volume 
+        self.max_depth = int(self.max_needle_depth /4) # downsamples image volume so / 4 
+        #self.max_depth = np.max(np.where(self.img_data['prostate_mask'][::2,::2,::4] == 1)[-1]) #max z depth with prostate present
 
         #Obtain image coordinates centred at the rectum 
         self.img_coords = self._obtain_vol_coords()
@@ -608,7 +670,6 @@ class TemplateGuidedBiopsy_penalty(gym.Env):
         self.tumour_centroids -= self.prostate_centroid # Centre coordinates at prostate centroid 
         #print(f"Tumour centroids {self.tumour_centroids}")
         self.tumour_projection = np.max(self.multiple_label_img, axis = 2)
-
         return self.img_data 
 
     def initialise_state(self, img_vol, start_centre = False):
@@ -618,9 +679,31 @@ class TemplateGuidedBiopsy_penalty(gym.Env):
         
         Returns:
         ----------
-        :state: 200 x 200 x 193 dimensions x 4
+        :state: 5 x 100 x 100 x 24 stack of observations 
+
+        Notes:
+        ---------
+        - prostate mask 100 x 100 x 24
+        - lesion mask 100 x 100 x 24 
+        - needle masks 3 x 100 x 100 x 24 
         """
 
+        
+        # 3. Obtain noisy prostate and tumour masks (add reg noise )
+        self.noisy_prostate_vol, tre_prostate = self.add_reg_noise(img_vol['prostate_mask'], tre_ = self.tre)
+        
+        # sample single lesion mask 
+        lesion_idx = np.random.choice(np.arange(1, self.num_lesions+1))
+        self.lesion_idx = (lesion_idx - 1) # 0 index, whilst masks are 1-indexed 
+        lesion_mask = self.separate_masks(self.multiple_label_img, lesion_idx)
+
+        #print(f"Lesion centre : {self.tumour_centroids[self.lesion_idx] + self.prostate_centroid}")
+        # Note : observation should now be just single lesion mask, instead of all of them!!! corrected bug 
+        # previous : self.add_reg_noise(img_data['tumour_mask]) which has all of hte masks, instead of single 
+
+        self.true_tumour_vol = lesion_mask 
+        self.noisy_tumour_vol, tre_tumour = self.add_reg_noise(lesion_mask, tre_ = self.tre+1) # more tre for tumour
+        
         # 1. Initialise starting point on template grid : within centre box of grid 
         all_possible_points  = np.arange(-15, 20, 5)
 
@@ -628,7 +711,11 @@ class TemplateGuidedBiopsy_penalty(gym.Env):
           starting_x = 0
           starting_y = 0 
         else:
-          starting_x, starting_y = np.random.choice(all_possible_points, 2)
+          # start from centre of lesion
+          starting_x, starting_y = self.start_lesion_bb()
+          #print(f"starting_x,y : [{starting_x}, {starting_y}]")
+
+          #starting_x, starting_y = np.random.choice(all_possible_points, 2)
 
         # 2. Obtain grid of initial needle starting position 
         grid_array = self.create_grid_array(starting_x, starting_y, needle_fired = False, display_current_pos = True)
@@ -636,20 +723,86 @@ class TemplateGuidedBiopsy_penalty(gym.Env):
 
         # Include number of needles left as additional info on image 
         grid_array = add_num_needles_left(grid_array, self.max_num_needles)
-        
         starting_points = np.array([starting_x, starting_y]) 
 
-        # 3. Obtain noisy prostate and tumour masks (add reg noise )
-        self.noisy_prostate_vol, tre_prostate = self.add_reg_noise(img_vol['prostate_mask'], tre_ = 3)
-        self.noisy_tumour_vol, tre_tumour = self.add_reg_noise(img_vol['tumour_mask'], tre_ = 4) # more tre for tumour
+        # Obtain needle obs 
+        starting_z = 0
+        current_pos = np.array([starting_x, starting_y, starting_z])
+        needle_obs = self.create_needle_vol(current_pos)
+        needle_stack = torch.tensor(np.array([np.zeros([100,100,24]), np.zeros([100,100,24]), needle_obs])) # t = -2 : t = 0 
 
-        #from matplotlib import pyplot as plt
-        #fig, axes = plt.subplots(2)
-        #axes[0].imshow(self.noisy_tumour_vol[:,:,22])
-        #axes[1].imshow(img_vol['tumour_mask'][0::2,0::2,0::2][:,:,22])
-        obs = self.obtain_obs_needle(grid_array, np.zeros_like(self.img_data['mri_vol']))
+        # deform 
+        obs_volume = torch.stack((torch.tensor(self.noisy_tumour_vol), torch.tensor(self.noisy_prostate_vol))).unsqueeze(0)
+        
+        if self.deform: 
+          obs_volume = self.apply_deforms(obs_volume.to(torch.device("cuda")), self.deform_rate, self.deform_scale)
+          obs_volume.to(torch.device("cpu"))
+          
+          obs_volume = obs_volume.cpu().squeeze().numpy()
+          obs_volume = np.swapaxes(obs_volume, 1, 3)
+          #obs_volume = np.swapaxes(obs_volume, 1, 2)
+          
+          lesion_deformed = obs_volume[0,:,:,:]
+          prostate_deformed = obs_volume[1,:,:,:]
+          
+          obs = torch.cat((torch.tensor(lesion_deformed).unsqueeze(0), torch.tensor(prostate_deformed).unsqueeze(0), needle_stack), axis = 0)
 
-        return obs, starting_points 
+        else:
+          
+          obs = torch.cat((torch.tensor(self.noisy_tumour_vol).unsqueeze(0), torch.tensor(self.noisy_prostate_vol).unsqueeze(0), needle_stack), axis = 0)
+        
+        #obs = self.obtain_obs_wneedle(grid_array, np.zeros_like(self.img_data['mri_vol']))
+
+        #obs = torch.cat((torch.tensor(self.noisy_tumour_vol).unsqueeze(0), torch.tensor(self.noisy_prostate_vol).unsqueeze(0), needle_stack), axis = 0)
+
+        return obs, starting_points, current_pos
+
+    def start_lesion_bb(self):
+      """
+      
+      # Initialises the needle starting point within bounding box of lesions
+
+
+      """
+      #TODO : find grid points within bb of tumour 
+      lesion_coords = np.where(self.true_tumour_vol == 1)
+      min_coords = np.min(lesion_coords, axis = 1)
+      max_coords = np.max(lesion_coords, axis = 1)
+      
+      # randomly sample from bb of lesion 
+      x_pos = int(np.random.uniform(min_coords[1], max_coords[1]))
+      y_pos = int(np.random.uniform(min_coords[0], max_coords[0]))
+      
+      # find closest lesion point for grid map
+      x_grid = (torch.arange(-30,35,5))*2 + self.prostate_centroid[0]
+      y_grid = (torch.arange(-30,35,5))*2 + self.prostate_centroid[1]
+      closest_x = x_grid[torch.argmin(torch.abs(x_grid - x_pos))]
+      closest_y = y_grid[torch.argmin(torch.abs(y_grid - y_pos))]
+      
+      #TODO : randomly sample grid points within tumoru 
+      x_grid_pos = int((closest_x - self.prostate_centroid[0])/2)
+      y_grid_pos = int((closest_y - self.prostate_centroid[1])/2)
+      
+      print(f"starting needle img coords : {closest_x}, {closest_y}")
+      
+      return torch.tensor([x_grid_pos, y_grid_pos])
+    
+    def separate_masks(self, multiple_lesions, lesion_idx):
+        """
+        A function that separates multiple lesion masks into single lesions only 
+        """
+        # for each lesion: 
+        unique_idx = np.unique(multiple_lesions)
+        num_lesion_masks = len(unique_idx) - 1
+        ds_lesion_mask = multiple_lesions
+        row, col, depth = np.shape(ds_lesion_mask)
+
+        img_vol = np.zeros((row, col, depth))
+
+        for i in range(depth):
+            img_vol[:,:,i] = (ds_lesion_mask[:,:,i] == lesion_idx)
+
+        return img_vol 
 
     def _obtain_vol_coords(self):
       
@@ -776,7 +929,7 @@ class TemplateGuidedBiopsy_penalty(gym.Env):
       A function that computes the relative new x and y positions relative to previous position 
       """
 
-      max_step_size = 10
+      max_step_size = 10 # changed max step size to 10 
       same_position = False
 
       x_movement = round_to_05(action_x * max_step_size)
@@ -815,7 +968,7 @@ class TemplateGuidedBiopsy_penalty(gym.Env):
       x_grid = updated_x
       y_grid = updated_y 
 
-      new_needle_pos = np.array([x_grid, y_grid])
+      new_needle_pos = np.array([int(x_grid), int(y_grid)])
 
       # Same position if needle_pos_before == new_needle_pos
       if np.all(new_needle_pos == self.current_needle_pos):
@@ -933,361 +1086,18 @@ class TemplateGuidedBiopsy_penalty(gym.Env):
       """
 
       intersection_volume = needle_traj * self.img_data['prostate_mask']
-
+    
       if np.all(intersection_volume == 0):
         # no intersection, therefore hits OUTSIDE the prostate 
         return True
+
       else:
         # intersects with prostate mask, so hits prostate 
         return False 
         
-    def compute_reward_ccl_sum(self, done, ccl_coeff, hit_rate, efficiency, same_position, moves_off_grid, magnitude = [1/3, 1/3, 1/3], scale_factor = 100):
-        
-        """
-        Computes reward function given CCL and if needle is fired or not 
-        
-        Parameters:
-        done: bool array to signify whether episode is done for final reward 
-        same_position: signify whether agent stays at same position 
-        magnitude: scalar value to scale the corrleation coeffieicnt by 
-        
-        Notes:
-        --------
-        1. CCL: ccl_coefficienct from previous experiences 
-        2. Hit_rate : number_lesions_hit / num_lesions_present
-        3. Efficiency : number_needles_hit / num_needles_fired
-
-        """
-        
-        if done:
-
-          #figure_plot = plt.figure()
-          #plt.scatter(self.all_sizes , self.all_ccl)
-          #plt.xlabel("Lesion sizes (number of voxels)")
-          #plt.ylabel("CCL (mm)")
-          #self.current_ccl_plot = plt.gcf()
-          #plt.close()
-
-          if np.isnan(ccl_coeff):
-            ccl_coeff = 0 
-          
-          print(f'CCL coeff: {ccl_coeff}')
-
-          ccl_reward = magnitude[0] * ccl_coeff 
-          hit_reward = magnitude[1] * hit_rate
-          eff_reward = magnitude[2] * efficiency
-
-          # Reward should sum to maximum of 1 * scale_factor (in this case 10 is chosen)
-          reward = scale_factor * (ccl_reward + hit_reward + eff_reward)
-          #print(f'Reward {reward} ccl_coeff : {ccl_coeff} hit rate : {hit_rate} num_needles_fired : {efficiency}')
-
-        else:
-          reward = 0
-
-        # Penalise for staying at the same position or moving off the grid
-        if same_position: 
-            reward -= 1 
-
-        if moves_off_grid:
-            reward -= 1
-
-        return reward
-    
-    def compute_reward_ccl_multiply(self, done, ccl_coeff, hit_rate, num_needles_fired, same_position, moves_off_grid, scale_factor = 100):
+    def compute_reward_simple_reward(self, done, ccl_coeff, hit_rate, needle_fired, needle_hit, max_num_needles_fired, same_position, moves_off_grid, scale_factor = 100):
         
       """
-      Computes reward function given CCL and if needle is fired or not 
-      
-      Parameters:
-      done: bool array to signify whether episode is done for final reward 
-      same_position: signify whether agent stays at same position 
-      magnitude: scalar value to scale the corrleation coeffieicnt by 
-      
-      Notes:
-      --------
-      1. CCL: ccl_coefficienct from previous experiences 
-      2. Hit_rate : number_lesions_hit  / num_lesions_present
-      3. Efficiency : number_needles_hit / num_needles_fired
-
-      """
-      if done:
-
-        # Reward should sum to maximum of 1 * scale_factor (in this case 10 is chosen)
-        if np.isnan(ccl_coeff):
-          ccl_coeff = 0 
-        
-        reward = (ccl_coeff * hit_rate * scale_factor) / num_needles_fired 
-        #print(f'Reward {reward} ccl_coeff : {ccl_coeff} hit rate : {hit_rate} num_needles_fired : {num_needles_fired}')
-
-      else:
-        reward = 0
-
-      # Penalise for staying at the same position or moving off the grid
-      if same_position: 
-          reward -= 1 
-
-      if moves_off_grid:
-          reward -= 1
-
-      return reward
-    
-    def compute_reward_ccl_penalty(self, done, ccl_coeff, hit_rate, needle_fired, needle_hit, max_num_needles_fired, same_position, moves_off_grid, scale_factor = 100):
-        
-      """
-      Computes reward function with added penalty for exceeding num needles fired 
-      
-      Parameters:
-      done: bool array to signify whether episode is done for final reward 
-      same_position: signify whether agent stays at same position 
-      magnitude: scalar value to scale the corrleation coeffieicnt by 
-      
-      Notes:
-      --------
-      1. CCL: ccl_coefficienct from previous experiences 
-      2. Hit_rate : number_lesions_hit  / num_lesions_present
-      3. Efficiency : number_needles_hit / num_needles_fired
-
-      """
-      if done:
-
-        # Reward should sum to maximum of 1 * scale_factor (in this case 10 is chosen)
-        if np.isnan(ccl_coeff):
-          ccl_coeff = 0 
-        
-        print(f'CCL COEFF {ccl_coeff}')
-        reward = (ccl_coeff * hit_rate * scale_factor) 
-        #print(f'Reward {reward} ccl_coeff : {ccl_coeff} hit rate : {hit_rate} num_needles_fired : {num_needles_fired}')
-
-      else:
-        
-        if needle_fired: 
-            if needle_hit:
-                reward = 1 
-            else:
-                reward = -1 
-            
-            # Check if fired needle traj hits the prostate 
-
-        # No needles fired, but still taking up time navigating 
-        else:
-            reward = -0.5 
-    
-      # Penalty for firing more needles than max needles fired of -10 
-      if max_num_needles_fired:
-          reward -= 10 
-
-      # Penalise for staying at the same position or moving off the grid
-      if same_position: 
-          reward -= 1 
-
-      if moves_off_grid:
-          reward -= 1
-
-      return reward
-
-    def compute_reward_ccl_reward_smallpenalty(self, done, ccl_coeff, hit_rate, needle_fired, needle_hit, max_num_needles_fired, same_position, moves_off_grid, penalty = 5, scale_factor = 100):
-        
-      """
-      Computes reward function with added penalty for exceeding num needles fired 
-      
-      Parameters:
-      done: bool array to signify whether episode is done for final reward 
-      same_position: signify whether agent stays at same position 
-      magnitude: scalar value to scale the corrleation coeffieicnt by 
-      
-      Notes:
-      --------
-      1. CCL: ccl_coefficienct from previous experiences 
-      2. Hit_rate : number_lesions_hit  / num_lesions_present
-      3. Efficiency : number_needles_hit / num_needles_fired
-
-      """
-      if done:
-
-        # Reward should sum to maximum of 1 * scale_factor (in this case 10 is chosen)
-        if np.isnan(ccl_coeff):
-          ccl_coeff = 0 
-        
-        print(f'CCL COEFF {ccl_coeff}')
-        reward = (ccl_coeff * hit_rate * scale_factor) 
-        #print(f'Reward {reward} ccl_coeff : {ccl_coeff} hit rate : {hit_rate} num_needles_fired : {num_needles_fired}')
-
-      else:
-        
-        if needle_fired: 
-            if needle_hit:
-                reward = 100 
-            else:
-                reward = -1 
-        
-        # No needles fired, but still taking up time navigating 
-        else:
-            reward = -0.8
-    
-      # Penalty for firing more needles than max needles fired of -10 
-      if max_num_needles_fired:
-          reward -= penalty
-
-      # Penalise for staying at the same position or moving off the grid
-      if same_position: 
-          reward -= 1 
-
-      if moves_off_grid:
-          reward -= 1
-
-      return reward
-
-    def compute_reward_hit_rate(self, done, ccl_coeff, hit_rate, needle_fired, needle_hit, max_num_needles_fired, same_position, moves_off_grid, miss_penalty = 2, penalty = 5, scale_factor = 100):
-        
-      """
-      Computes reward function with added penalty for exceeding num needles fired 
-      
-      Parameters:
-      done: bool array to signify whether episode is done for final reward 
-      same_position: signify whether agent stays at same position 
-      magnitude: scalar value to scale the corrleation coeffieicnt by 
-      
-      Notes:
-      --------
-      1. CCL: ccl_coefficienct from previous experiences 
-      2. Hit_rate : number_lesions_hit  / num_lesions_present
-      3. Efficiency : number_needles_hit / num_needles_fired
-
-      """
-      if done:
-
-        # Reward should sum to maximum of 1 * scale_factor (in this case 10 is chosen)
-        if np.isnan(ccl_coeff):
-          ccl_coeff = 0 
-        
-        #print(f'CCL COEFF {ccl_coeff}')
-        reward = (hit_rate * scale_factor) 
-        #print(f'Reward {reward} ccl_coeff : {ccl_coeff} hit rate : {hit_rate} num_needles_fired : {num_needles_fired}')
-
-      else:
-
-          if needle_hit:
-              reward = 100 
-
-          else:
-              reward = -miss_penalty # -2 * 50 = -100 reward for not hitting any lesion at the end of 50 steps ie bad episode 
-      
-      # Penalty for firing more needles than max needles fired of -10 
-      if max_num_needles_fired:
-          reward -= penalty
-
-      # Penalise for staying at the same position or moving off the grid
-      if same_position: 
-          reward -= 1 
-
-      if moves_off_grid:
-          reward -= 1
-
-      return reward
- 
-    def compute_reward_ccl(self, done, ccl_coeff, hit_rate, needle_fired, needle_hit, max_num_needles_fired, same_position, moves_off_grid, miss_penalty = 2, penalty = 5, scale_factor = 100):
-        
-      """
-      Bonus reward is CCL
-      Computes reward function with added penalty for exceeding num needles fired 
-      
-      Parameters:
-      done: bool array to signify whether episode is done for final reward 
-      same_position: signify whether agent stays at same position 
-      magnitude: scalar value to scale the corrleation coeffieicnt by 
-      
-      Notes:
-      --------
-      1. CCL: ccl_coefficienct from previous experiences 
-      2. Hit_rate : number_lesions_hit  / num_lesions_present
-      3. Efficiency : number_needles_hit / num_needles_fired
-
-      """
-      if done:
-
-        # Reward should sum to maximum of 1 * scale_factor (in this case 10 is chosen)
-        if np.isnan(ccl_coeff):
-          ccl_coeff = 0 
-        
-        #print(f'CCL COEFF {ccl_coeff}')
-        reward = (ccl_coeff * scale_factor) 
-        #print(f'Reward {reward} ccl_coeff : {ccl_coeff} hit rate : {hit_rate} num_needles_fired : {num_needles_fired}')
-
-      else:
-
-          if needle_hit:
-              reward = 100 
-
-          else:
-              reward = -miss_penalty # -2 * 50 = -100 reward for not hitting any lesion at the end of 50 steps ie bad episode 
-      
-      # Penalty for firing more needles than max needles fired of -10 
-      if max_num_needles_fired:
-          reward -= penalty
-
-      # Penalise for staying at the same position or moving off the grid
-      if same_position: 
-          reward -= 1 
-
-      if moves_off_grid:
-          reward -= 1
-
-      return reward
-
-    def compute_reward_ccl_only(self, done, ccl_coeff, hit_rate, needle_fired, needle_hit, max_num_needles_fired, same_position, moves_off_grid, inc_HR = False, inc_CCL = False ,scale_factor = 100):
-      
-      """Computes simple reward function 
-      
-      Parameters:
-      done: bool array to signify whether episode is done for final reward 
-      same_position: signify whether agent stays at same position 
-      magnitude: scalar value to scale the corrleation coeffieicnt by 
-      
-      Notes:
-      --------
-      1. CCL: ccl_coefficienct from previous experiences 
-      2. Hit_rate : number_lesions_hit  / num_lesions_present
-      3. Efficiency : number_needles_hit / num_needles_fired
-
-      """
-
-      reward = 0 
-
-      if done:
-
-        if np.isnan(ccl_coeff):
-          ccl_coeff = 0 
-        #print(f'CCL COEFF {ccl_coeff}')
-
-        # Penalty for exceeding number of needles fired 
-        if max_num_needles_fired:
-          reward -= 50
-        
-        if inc_HR: 
-          #BONUS reward of 10 * hit_rate (max 10, minimum 0 )
-          min_hit_threshold = 0.5 
-
-          if hit_rate > min_hit_threshold: 
-            reward += hit_rate * scale_factor
-          else: 
-            reward -= scale_factor # did not hit the minimum number of lesions 
-          
-        if inc_CCL: 
-          reward += ccl_coeff * scale_factor 
-
-      if same_position: 
-          reward -= 5 
-
-      if moves_off_grid:
-          reward -= 5
-
-      return reward
-
-    def compute_reward_simple_reward(self, done, ccl_coeff, hit_rate, needle_fired, needle_hit, max_num_needles_fired, same_position, moves_off_grid, inc_HR = False, inc_CCL = False ,scale_factor = 100):
-        
-      """
-      
-
       Computes simple reward function 
       
       Parameters:
@@ -1300,30 +1110,26 @@ class TemplateGuidedBiopsy_penalty(gym.Env):
       1. CCL: ccl_coefficienct from previous experiences 
       2. Hit_rate : number_lesions_hit  / num_lesions_present
       3. Efficiency : number_needles_hit / num_needles_fired
+
       """
-
-      reward = 0 
-
       if done:
 
         if np.isnan(ccl_coeff):
           ccl_coeff = 0 
+        
         #print(f'CCL COEFF {ccl_coeff}')
 
-        # Penalty for exceeding number of needles fired 
-        if max_num_needles_fired:
-          reward -= 50
-        
-        if inc_HR: 
-          #BONUS reward of 10 * hit_rate (max 10, minimum 0 )
-          min_hit_threshold = 0.5 
+        #BONUS reward of 10 * hit_rate (max 10, minimum 0 )
+        min_hit_threshold = 0.5 
+        if hit_rate > min_hit_threshold: 
+          reward = scale_factor
+        else: 
+          reward = -50 # did not hit the minimum number of lesions 
+        reward = hit_rate * scale_factor
 
-          if hit_rate > min_hit_threshold: 
-            reward += hit_rate * scale_factor
-          else: 
-            reward -= scale_factor # did not hit the minimum number of lesions 
-          
-        reward += ccl_coeff * scale_factor 
+        #Large penalty of exceeding number of needles fired 
+        if max_num_needles_fired:
+          reward -= 50 
 
       else:
         
@@ -1334,75 +1140,21 @@ class TemplateGuidedBiopsy_penalty(gym.Env):
                 reward = -1 
         
         # No needles fired, but still taking up time navigating 
-        #else:
-        #    reward = -0.8 
+        else:
+            reward = -0.8 
 
       # Penalise for staying at the same position or moving off the grid
       if same_position: 
           reward -= 5 
 
       if moves_off_grid:
-          reward -= 5
+          reward -= 10
 
       return reward
 
-    def compute_reward_ccl_reward(self, done, ccl_coeff, hit_rate, needle_fired, needle_hit, max_num_needles_fired, same_position, moves_off_grid, scale_factor = 100):
+    def compute_reward(self, needle_fired, needle_hit, outside_prostate):
         
       """
-      Computes reward function with added penalty for exceeding num needles fired 
-      
-      Parameters:
-      done: bool array to signify whether episode is done for final reward 
-      same_position: signify whether agent stays at same position 
-      magnitude: scalar value to scale the corrleation coeffieicnt by 
-      
-      Notes:
-      --------
-      1. CCL: ccl_coefficienct from previous experiences 
-      2. Hit_rate : number_lesions_hit  / num_lesions_present
-      3. Efficiency : number_needles_hit / num_needles_fired
-
-      """
-      if done:
-
-        # Reward should sum to maximum of 1 * scale_factor (in this case 10 is chosen)
-        if np.isnan(ccl_coeff):
-          ccl_coeff = 0 
-        
-        print(f'CCL COEFF {ccl_coeff}')
-        reward = (ccl_coeff * hit_rate * scale_factor) 
-        #print(f'Reward {reward} ccl_coeff : {ccl_coeff} hit rate : {hit_rate} num_needles_fired : {num_needles_fired}')
-
-      else:
-        
-        if needle_fired: 
-            if needle_hit:
-                reward = 100 
-            else:
-                reward = -1 
-        
-        # No needles fired, but still taking up time navigating 
-        else:
-            reward = -0.5 
-    
-      # Penalty for firing more needles than max needles fired of -10 
-      if max_num_needles_fired:
-          reward -= 10 
-
-      # Penalise for staying at the same position or moving off the grid
-      if same_position: 
-          reward -= 1 
-
-      if moves_off_grid:
-          reward -= 1
-
-      return reward
-
-
-    def compute_reward_BASIC(self, needle_fired, needle_hit, penalty_reward = 10):
-        
-      """
-    
       Computes simple reward function 
       
       Parameters:
@@ -1410,96 +1162,163 @@ class TemplateGuidedBiopsy_penalty(gym.Env):
       same_position: signify whether agent stays at same position 
       magnitude: scalar value to scale the corrleation coeffieicnt by 
       
-      Notes:
-      --------
-      1. CCL: ccl_coefficienct from previous experiences 
-      2. Hit_rate : number_lesions_hit  / num_lesions_present
-      3. Efficiency : number_needles_hit / num_needles_fired
       """
 
       reward = 0 
 
-      # Reward for firing : set to 100 (incentivise firing more)
-      if needle_hit:
-        reward = 100
-      else: 
-        # Penalty for misfiring : automatically set to 10 
-        reward = -penalty_reward 
+      # if fired : +10 for lesion 
+      if needle_fired: 
 
+        if needle_hit: 
+          reward += 10
+        else:
+          reward -= 2 # for missing 
+
+      # if not fired, -1 for taking up time 
+      else:
+        reward -= 1 # for taking up time and not firing 
+
+      if outside_prostate:
+        reward -= 5
+    
       return reward
 
-    def compute_reward_BASIC_FIRED(self, needle_fired, needle_hit, done = False, penalty_reward = 10):
+    def compute_reward_classify(self, needle_fired, needle_hit, outside_prostate, label_z, pred_z):
         
       """
-    
-      Computes reward function, simila to basic, but differentiates firing from non-firing!!!
+      Computes reward function with classificatoin 
       
       Parameters:
       done: bool array to signify whether episode is done for final reward 
       same_position: signify whether agent stays at same position 
       magnitude: scalar value to scale the corrleation coeffieicnt by 
       
-      Notes:
-      --------
-      1. CCL: ccl_coefficienct from previous experiences 
-      2. Hit_rate : number_lesions_hit  / num_lesions_present
-      3. Efficiency : number_needles_hit / num_needles_fired
       """
 
-      reward = 0 
+      # navigation reward : x,y 
+      nav_reward = 0 
+       
+      # TODO : consider needle hit AND needle fired; if not hit then no penalty 
+      if needle_hit: 
+        nav_reward += 10 
+      else : 
+        nav_reward -= 2
+      
+      # hit reward : z depth ; classification reward 
+      hit_reward = 0 
 
-      # Reward for firing : set to 100 (incentivise firing more)
-      if needle_fired:
-        if needle_hit:
-          reward = 100
+      if label_z == pred_z: 
+        hit_reward += 10 
+      else: 
+        hit_reward = 0 
+
+      reward = (2/3)*nav_reward + (1/3)*hit_reward  # z reward + x,y reward; z reward is 1/3 weighted 
+
+      if outside_prostate:
+        reward -= 3
+    
+      return reward
+
+    def compute_reward_penalty(self, needle_fired, needle_hit, outside_prostate, label_z, pred_z, done):
+        """
+        Computes reward function with navigaiton and hitting separately rewarded 
+
+        Args:
+            needle_fired (_type_): _description_
+            needle_hit (_type_): _description_
+            outside_prostate (_type_): _description_
+            label_z (_type_): _description_
+            pred_z (_type_): _description_
+            done (function): _description_
+        """
+        
+        # Navigation reward
+        nav_reward = 0 
+        
+        if needle_hit: 
+            nav_reward += 10 
         else: 
-          # Penalty for misfiring : automatically set to 10 
-          reward = -penalty_reward # rather get # -10 if needle is fired where there's no lesion 
-      
-      else:
-        if needle_hit:
-          reward = -100 # changed from -20 to -100 to FORCE agent to fire if a lesion is observed 
-        else:
-          reward = 0 #changed from +10 to 0 ; 0 if needle is not fired where there's no lesion 
+            nav_reward -= 2
+            
+        hit_reward = 0 
+        
+        if label_z == pred_z: 
+            hit_reward += 10 
+        else: 
+            hit_reward = 0 
+            
+        reward = (2/3)*nav_reward + (1/3)*hit_reward  # z reward + x,y reward; z reward is 1/3 weighted 
+        
+        # ~Penalty for firing outside prostate 
+        if outside_prostate:
+            reward -= 5 # increase penalty for firing outside prostate from 3 to 5 
 
-      # Check if done -> penalty for not firing 
-      if done and self.num_needles <= 3: # 4 needles minimum per lesion
-        reward -= 500 #massive penalty for not firing 
-
-      return reward
-
-    def compute_reward_BASIC_20(self, needle_fired, needle_hit, penalty_reward = 10):
+        print(f"Rewards navigation {nav_reward} hit : {hit_reward} total : {reward}")
+        
+        return reward 
+    
+        
+    def compute_reward_metrics(self, hr, needle_fired, needle_hit, outside_prostate, done, metric = 'ccl'):
         
       """
-    
-      Computes simple reward function 
+      Computes reward function based on CCL norm, hit_rate 
       
       Parameters:
       done: bool array to signify whether episode is done for final reward 
       same_position: signify whether agent stays at same position 
       magnitude: scalar value to scale the corrleation coeffieicnt by 
       
-      Notes:
-      --------
-      1. CCL: ccl_coefficienct from previous experiences 
-      2. Hit_rate : number_lesions_hit  / num_lesions_present
-      3. Efficiency : number_needles_hit / num_needles_fired
       """
-
-      reward = 0 
-
-      # Reward for firing : set to 100 (incentivise firing more)
-      if needle_hit:
-        reward = 50
-      else: 
-        # Penalty for misfiring : automatically set to 10 
-        reward = -penalty_reward 
-
       
+      # reward is average ccl_norm : ie np.mean(ccl_norm)
+      
+      # ccl is obtained after needle sampling is accomplished! 
+      if done: 
+        
+        reward = 0 
+        
+        if metric == 'ccl':
+          ccl_norm = np.nanmean(self.all_norm_ccl)
+          print(f"ccl norm : {ccl_norm}")
+          reward = ccl_norm * 100 # percentage of ccl norm 
+        
+        elif metric == 'hr':
+          reward = hr * 100 # percentage of ccl norm 
 
+        elif metric == 'coverage':
+          #TODO
+          raise("Not yet implemented")
+        
+        else: 
+          # combination of all of them 
+          print(f"Metrics : Combined")
+          reward = 100*((ccl_norm)*0.5 + hr*0.5) #equally weight ccl norm and hr 
+        
+        print(f"Done : reward : {reward}")
+      else: 
+        # Reward shaping : 
+        # Small intermediate rewards
+        reward = 0 
+
+        # if fired : +10 for lesion 
+        if needle_fired: 
+
+          if needle_hit: 
+            reward += 1
+          else:
+            reward -= 0.2 # for missing 
+
+        # if not fired, -1 for taking up time 
+        else:
+          reward -= 0.1 # for taking up time and not firing 
+
+        if outside_prostate:
+          reward -= 0.5
+          
       return reward
 
-    def compute_needle_traj(self, x_grid, y_grid, noise_added = False):  
+
+    def compute_needle_traj(self, x_grid, y_grid, depth, noise_added = False):  
         """
 
         A function that computes the needle trajectory mask, to use for computing the CCL
@@ -1517,22 +1336,101 @@ class TemplateGuidedBiopsy_penalty(gym.Env):
         if noise_added: 
             # TODO - add noise to needle trajectory 
             pass
-
-        # Change x_grid, y_grid from lesion coords to image coords
-        x_grid = (x_grid*2) + self.prostate_centroid[0] # x_grid and y_grid multiplied by 2 to account for 0.5x0.5x1 resolution of mri dataset
-        y_grid = (y_grid*2) + self.prostate_centroid[1]
+          
+        # Change x_grid, y_grid from lesion coords to image coords; centre around prostate centroid 
+        x_pos = (x_grid)*2 + self.prostate_centroid[0] # x_grid and y_grid multiplied by 2 to account for 0.5x0.5x1 resolution of mri dataset
+        y_pos = (y_grid)*2 + self.prostate_centroid[1]
+        
+        depth_map = {1 : 0.5, 2 : 1}
         
         # 16g/18g corresponds to 1.2mm, 1.6mm diameter ie 3 pixels taken up on x,y plane 
         needle_mask = np.zeros_like(self.img_data['mri_vol'])
-        needle_mask[y_grid -1 : y_grid +2 , x_grid -1 : x_grid +2, 0:self.max_needle_depth] = 1
+        
+        if depth != 0:
+          scale_factor = depth_map[depth]
+          needle_mask[y_pos -1 : y_pos +2 , x_pos -1 : x_pos +2, 0:int(scale_factor *self.max_needle_depth)] = 1
 
-        #intersection_volume = needle_mask * self.img_data['tumour_mask']
+        # needle_mask = np.zeros_like(self.img_data['mri_vol'])
+        # for x_grid in range(-30,35,5):
+        #   for y_grid in range(-30,35,5):
+            
+        #       x_pos = (x_grid)*2 + self.prostate_centroid[0] # x_grid and y_grid multiplied by 2 to account for 0.5x0.5x1 resolution of mri dataset
+        #       y_pos = (y_grid)*2 + self.prostate_centroid[1]
+        
+        #       needle_mask[y_pos -1 : y_pos +2 , x_pos -1 : x_pos +2, 0:int(scale_factor *self.max_needle_depth)] = 1
 
-        return needle_mask 
 
-    def compute_ccl(self, needle_mask):
+        # compute intersection volume 
+        intersection_volume = needle_mask * self.true_tumour_vol
+
+        # Computer intersection voluem for reward 
+        virtual_needle_mask = np.zeros_like(self.img_data['mri_vol'])
+        virtual_needle_mask[y_pos -1 : y_pos +2 , x_pos -1 : x_pos +2, 0:self.max_needle_depth] = 1 
+
+        # compute intersection volume for reward computation 
+        intersection_reward = virtual_needle_mask * self.true_tumour_vol 
+
+        if len(np.unique(intersection_reward)) != 1: # if only 0 
+
+          z_tumour = np.max(np.where(intersection_reward)[-1])
+
+          # apex if tumour depth < halfway of prostate gland depth else base 
+          apex = (z_tumour <= (self.max_needle_depth/2))
+          
+          if apex: 
+            ground_truth_z = 1 
+          else:
+            ground_truth_z = 2 
+
+        else: 
+          ground_truth_z = 0 
+
+        return needle_mask, intersection_volume, ground_truth_z 
+
+    def compute_ccl(self, intersection_volume):
+
+      """
+      Computes the CCL given the intersection volume
+
+      Parameters:
+      ------------
+      intersection_volume : 200 x 200 x 96 array of intersection 
+
+      Returns:
+      -----------
+      ccl : end point - begin point from tip to end of needle euclidean distance 
+      ccl_approximate : simply computes differnece in z as an approximate to ccl 
+      """
+      
+      # ie binary vol only contains 0s 
+      no_intersect = (len(np.unique(intersection_volume)) == 1)
+     
+      # compute max ccl (approximate only! from bb of tumour)
+      all_z_tum = (np.where(self.true_tumour_vol == 1))[-1]
+      max_ccl = np.max(all_z_tum) - np.min(all_z_tum)
+      
+      if no_intersect:
+        ccl = 0 
+        ccl_approximate = 0 
+      
+      else:
+        y_vals, x_vals, z_vals = np.where(intersection_volume == 1)
+        idx_max = np.where(z_vals == np.max(z_vals))[0] #idx where coords are maximum z depth 
+        idx_min = np.where(z_vals == np.min(z_vals))[0]
+
+        # Compute average centres at z_min and z_max, and compute euclidean distance   
+        begin_point = np.array([np.mean(x_vals[idx_min]), np.mean(y_vals[idx_min]), np.min(z_vals)])
+        end_point = np.array([np.mean(x_vals[idx_max]), np.mean(y_vals[idx_max]), np.max(z_vals)])
+
+        ccl_approximate = np.max(z_vals) - np.min(z_vals) #can be used as ccl if no noise is added to needle_traj 
+        ccl = np.sqrt(np.sum((end_point - begin_point) ** 2))
+
+
+      return ccl, ccl_approximate, max_ccl 
+
+    def compute_ccl_multiple_lesions(self, needle_mask):
         """
-        Computes CCL given needle mask and tumour masks 
+        Computes CCL given needle mask and tumour masks when multiple lesions are present! 
 
         Params:
         needle_mask : ndarray 200 x 200 x 96 binary mask of needle trajectory 
@@ -1618,13 +1516,32 @@ class TemplateGuidedBiopsy_penalty(gym.Env):
 
       return max_ccl 
 
-if __name__ == '__main__':
-        
-    #Evaluating agent on training and testing data 
-    ps_path = '/Users/ianijirahmae/Documents/DATASETS/Data_by_modality'
-    csv_path = '/Users/ianijirahmae/Documents/PhD_project/rectum_pos.csv'
+    def apply_deforms(self, volume, rate = 0.25, scale = 0.1, threshold = 0.45):
+      """      
+      A function that deforms the prostate and lesion glands together
 
-    #ps_path = '/raid/candi/Iani/MRes_project/Reinforcement Learning/DATASETS/'
+      Parameters:
+      :volume: ndarray 2 x 100 x 100 x 25
+      """
+      
+      # Generate new transform per time step 
+      self.random_transform.generate_random_transform(rate = rate, scale = scale)
+      
+      # Apply same transformation to lesion and prostate gland 
+      deformed_vol = self.random_transform.warp(volume.type(torch.float32))
+      deformed_vol = 1.0*(deformed_vol >= threshold)
+      
+      return deformed_vol
+    
+if __name__ == '__main__':
+
+    #Evaluating agent on training and testing data 
+    #ps_path = '/Users/ianijirahmae/Documents/DATASETS/Data_by_modality'
+    #rectum_path = '/Users/ianijirahmae/Documents/PhD_project/rectum_pos.csv'
+    #csv_path = '/Users/ianijirahmae/Documents/PhD_project/MRes_project/Reinforcement Learning/patient_data_multiple_lesions.csv'
+
+    ps_path = '/raid/candi/Iani/MRes_project/Reinforcement Learning/DATASETS/'
+    csv_path = '/raid/candi/Iani/Biopsy_RL/patient_data_multiple_lesions.csv'
     #rectum_path = '/raid/candi/Iani/MRes_project/Reinforcement Learning/rectum_pos.csv'
     
     log_dir = 'test'
@@ -1633,149 +1550,57 @@ if __name__ == '__main__':
     PS_dataset_train = Image_dataloader(ps_path, csv_path, use_all = False, mode  = 'train')
     Data_sampler_train = DataSampler(PS_dataset_train)
 
-    Biopsy_env_init = TemplateGuidedBiopsy_penalty(Data_sampler_train, results_dir = log_dir, max_num_steps = 100, reward_fn = 'patient', obs_space = 'both') #Data_sampler_train,
+    Biopsy_env_init = TemplateGuidedBiopsy(Data_sampler_train, results_dir = log_dir, max_num_steps = 20, reward_fn = 'patient', obs_space = 'both', start_centre = False) #Data_sampler_train,
     
     test_obs = Biopsy_env_init.reset()
+    new_obs = Biopsy_env_init.step([-1.5,1,1])
 
-    #from PIL import Image, ImageDraw, ImageFont
-    #img = Image.fromarray(np.uint8(test_obs[:,:,0]*255))
-    #test_str = "Needles left:" + str(100)
-    #img_test = ImageDraw.Draw(img)    
-    #img_test.text((3, 90), test_str, fill = (100))
-    #img_array = np.array(img)
-    #img_normalised = (img_array - np.min(img_array)) / (np.max(img_array) - np.min(img_array))
-    #plt.imshow(img_array)
-    #img.show()
+    # Initiate random policy 
 
 
-    #Biopsy_env_init = frame_stack_v1(Biopsy_env_init, 3)
-    initial_obs = Biopsy_env_init.reset()
+    print('chicken')
 
-    for episode_num in range(5):
+    def evaluate(model, num_episodes=100, deterministic=True):
+      """
+      Evaluate a RL agent
+      :param model: (BaseRLModel object) the RL Agent
+      :param num_episodes: (int) number of episodes to evaluate it
+      :return: (float) Mean reward for the last num_episodes
+      """
+      # This function will only work for a single Environment
+      vec_env = model.get_env()
+      all_episode_rewards = []
+      for i in range(num_episodes):
+          episode_rewards = []
+          done = False
+          obs = vec_env.reset()
+          num_steps = 0 
+          while not done:
+              # _states are only useful when using LSTM policies
+              action, _states = model.predict(obs, deterministic = False)
+              # here, action, rewards and dones are arrays
+              # because we are using vectorized env
+              # also note that the step only returns a 4-tuple, as the env that is returned
+              # by model.get_env() is an sb3 vecenv that wraps the >v0.26 API
+              obs, reward, done, info = vec_env.step(action)
+              print(f"Actions: {action} reward : {reward}")
+              episode_rewards.append(reward)
+              all_episode_rewards.append(sum(episode_rewards))
+              num_steps += 1 
 
-        Biopsy_env_init.reset()
-        print(f"Episode num : {episode_num}")
+          print(f"Done after: {num_steps} cummulative reward : {sum(episode_rewards)}")
 
-        done_new_patient = False
-        all_actions = [] 
-        all_rewards = [] 
-        time_counter = 0 
+      mean_episode_reward = np.mean(all_episode_rewards)
+      std_reward = np.std(all_episode_rewards)
+      print("Mean reward:", mean_episode_reward, "Num episodes:", num_episodes)
 
-        while not done_new_patient:
-
-            #action, _states = Agent.predict(obs, deterministic = True)
-
-            #Random action
-            action = Biopsy_env_init.action_space.sample()
-            all_actions.append(action)
-
-            # here, action, rewards and dones are arrays
-            # because we are using vectorized env
-            obs, reward, done, info = Biopsy_env_init.step(action)
-            done_new_patient = info['new_patient']
-            all_rewards.append(reward)
-            time_counter +=1 
-        
-        print(f"Max num needles : {info['max_num_needles']}")
-        plt.figure()
-        fig, axes = plt.subplots(1,4)
-        axes[0].imshow(obs[0,:,:,0])
-        axes[1].imshow(obs[:,:,25])
-        axes[2].imshow(obs[:,:,50])
-        axes[3].imshow(info['firing_grid'])
-        print('Chicken')
-        num_needles = np.sum(np.stack(all_actions)[:,2] >= 0)
-        print(f'Number of needles fired : {num_needles} \n')
-
-        #fig_plot = info['ccl_plots']
-        #Biopsy_env_init.reset()
-
-        #all_episode_ccl[episode_num] = info['ccl_corr']
-        #print(f"Time_step {time} reward : {reward} ccl : {[info['all_ccl'][-1] if reward != -0.5 else 0]}") # action_z : {action[2]}")
-        #print(f"Episode length {time_counter}, total reward : {np.sum(all_rewards)}, final_reward : {reward} ")
-        #print(f"CCL corr: {info['ccl_corr_online']} Hit rate : {info['hit_rate']} Efficiency {info['efficiency']:03f} \n")
+      return mean_episode_reward, std_reward
     
-        #all_episode_len[episode_num] = time_counter
-   
-    print('Chicken')
-    print('Chicken')
+    # initialise agent
+    policy_kwargs = dict(features_extractor_class = NewFeatureExtractor, features_extractor_kwargs=dict(multiple_frames = True))
+    agent = PPO(CnnPolicy, Biopsy_env_init, policy_kwargs = policy_kwargs, n_epochs = 3, learning_rate = 0.0001, tensorboard_log = 'test')
+    #model = PPO(CnnPolicy, Biopsy_env_init, verbose=0)
 
-    plt.figure()
-    plt.imshow(obs[:,:,50])
-    
+    mean_reward, std_reward = evaluate(agent, num_episodes = 10)
 
-    seed = 1
-
-    def make_vec_env(n_envs, vecenv_class = 'Dummy', monitor_dir = './log', monitor_kwargs = None, seed=0):
-        """
-        Utility function for multiprocessed env.
-
-        :param env_id: (str) the environment ID
-        :param num_env: (int) the number of environments you wish to have in subprocesses
-        :param seed: (int) the inital seed for RNG
-        :param rank: (int) index of the subprocess
-        """
-
-        def make_env(rank, seed = 0):
-            def _init():
-                
-                rank_num = str(rank)
-                #Initialise environment
-                Biopsy_env_init = TemplateGuidedBiopsy_penalty(Data_sampler_train, env_num = rank_num, obs_space = 'images')
-                #Biopsy_env = frame_stack_v1(Biopsy_env_init, 3)
-                Biopsy_env = Biopsy_env_init
-                Biopsy_env.reset()
-                #Biopsy_env.seed(seed + rank)
-                Biopsy_env.action_space.seed(seed + rank)
-            
-                # Wrap the env in a Monitor wrapper
-                # to have additional training information
-                monitor_path = os.path.join(monitor_dir, str(rank)) 
-
-                # Create the monitor folder if needed
-                if monitor_path is not None:
-                    os.makedirs(monitor_dir, exist_ok=True)
-
-                env = Monitor(Biopsy_env, filename=monitor_path)
-
-                return env
-
-            set_random_seed(seed)
-            return _init        
-
-        if vecenv_class == 'Dummy':
-            return DummyVecEnv([make_env(i) for i in range(n_envs)])
-        else: 
-            return SubprocVecEnv([make_env(i) for i in range(n_envs)])
-            
-    Vec_Biopsy_env = make_vec_env(n_envs = 4, vecenv_class = 'Dummy', monitor_dir = 'test_cats')#.to(device_cuda)
-    Biopsy_env = VecFrameStack(Vec_Biopsy_env, 3, channels_order = 'last')
-
-    from stable_baselines3.common.vec_env import VecFrameStack
-    Biopsy_env_init = VecFrameStack(Biopsy_env, 3)
-    #for key,subspace in Biopsy_env.observation_space.spaces.items():
-    #  print(key)
-
-    policy_kwargs = dict(features_extractor_class = SimpleFeatureExtractor_3D, features_extractor_kwargs=dict(multiple_frames = True, num_multiple_frames = 75))
-    agent = PPO(CnnPolicy, Biopsy_env, policy_kwargs = policy_kwargs, n_epochs = 2, learning_rate = 0.0001, tensorboard_log = 'test')
-    callback_train = SaveOnBestTrainingRewardCallback_moreinfo(check_freq=100, log_dir = 'test')
-    agent.learn(total_timesteps= 1000, callback = callback_train)
-
-    Biopsy_env_init = frame_stack_v1(Biopsy_env_init, 3)
-    initial_obs = Biopsy_env_init.reset()
-    #initial_obs = Biopsy_env_init.reset()
-
-    # Initialise random agent 
-    policy_kwargs = dict(features_extractor_class = FeatureExtractor, features_extractor_kwargs=dict(multiple_frames = True, num_multiple_frames = 75))
-    os.environ["CUDA_VISIBLE_DEVICES"] = '2'
-    Agent = PPO(CnnPolicy, Biopsy_env_init,  gamma = 0.9, policy_kwargs = policy_kwargs, \
-        n_steps = 1000, batch_size = 128, n_epochs = 2, learning_rate = 0.0001, \
-          ent_coef = 0.0001, tensorboard_log = log_dir)
-
-     # Take steps in biopsy env to test new moving off grid 
-    #obs, reward, done, info = Biopsy_env_init.step(np.array([-1,0,0]))
-
-    # Initialise episode, let agent act randomly 
-    all_episode_len = np.zeros(100,) 
-    all_episode_ccl = np.zeros(100,)
-
+    print('chicken')

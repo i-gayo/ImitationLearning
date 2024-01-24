@@ -5,8 +5,8 @@ from torch.utils.data import Dataset, DataLoader, RandomSampler
 import pandas as pd 
 import os 
 import h5py
-from networks import * 
-from utils import * 
+from networks.networks import * 
+from utils.utils import * 
 import argparse 
 
 #Arg parse functions 
