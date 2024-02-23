@@ -62,7 +62,7 @@ class LabelledImageWorld:
         target: (z,y,x) volume
         voxdims: (x,y,z) voxel dimensions mm/unit
         """
-        INITIAL_OBSERVE_LOCATION = "random"  # ("random", "centre")
+        INITIAL_OBSERVE_LOCATION = "centre"  # ("random", "centre")
         INITIAL_OBSERVE_RANGE = 0.3
 
         self.device = gland.device
@@ -99,6 +99,7 @@ class LabelledImageWorld:
         elif INITIAL_OBSERVE_LOCATION == "centre":
             self.observe_mm = torch.zeros(self.batch_size, 3).to(self.device)
 
+        print('chicken')
     @property
     def observe_norm(self):
         return self.convert_mm2norm(self.observe_mm)
@@ -159,8 +160,8 @@ class LabelledImageWorld:
                             -self.vol_size_mm[n][0] / 2,
                             self.vol_size_mm[n][0] / 2,
                             self.vol_size[0],
-                        ),
-                        indexing="ij",
+                        )
+                        #indexing="ij",
                     ),
                     dim=3,
                 )
@@ -189,8 +190,8 @@ class LabelledImageWorld:
                             self.vol_size_mm[n][1] / 2,
                             self.vol_size[1],
                         ),
-                        torch.tensor([0.0]),
-                        indexing="ij",
+                        torch.tensor([0.0])
+                        #indexing="ij",
                     ),
                     dim=3,
                 )
@@ -546,6 +547,12 @@ class NeedleGuide:
 
         return (needle_samples_mm, needle_centres_mm)
 
+    def update_new(self, world, actions):
+        """
+        Updates the world based on the actions given by the agent
+        """
+        pass 
+        
     def update(self, world, observation):
         """
         Calculate the action according to a policy
@@ -560,6 +567,8 @@ class NeedleGuide:
              - if true, update sample_x, y, z, with nearest centre (or largest CCL)
             """
             # update in batch for efficiency
+            
+            # Find target centre coordinates for each batch
             target_coords_mm = world.get_mask_coords_mm(world.target)
             self.target_centre_mm = torch.stack(
                 [target_coords_mm[b].mean(dim=0) for b in range(world.batch_size)],
@@ -567,18 +576,33 @@ class NeedleGuide:
             )
             # if three_class: observe_update = ((self.target_centre-world.observe_mm) / (self.observe_stepsize*2)).round().sign()
             # self.observe_update = torch.nn.functional.one_hot((observe_update+1).type(torch.int64),num_classes=3)
+            
+            # difference between current observe location and lesion centre
             d_t2o = (
                 self.target_centre_mm - world.observe_mm
-            )  # difference between current observe location and lesion centre
+            )  
+            
+            # Determine whether to update observe_update based on a step size
+            # if greater than step size, update! 
+            
+            # first is >step size +ve step; second layer is step size -ve step
             self.observe_update = torch.stack(
                 (d_t2o >= self.observe_stepsize, d_t2o <= -self.observe_stepsize), dim=2
             )
+            
+
+            
+            # If updates are needed, apply them and update observe_update_mm
             if self.observe_update.any():  # update observe_update
                 self.observe_update_mm = (
                     self.observe_update[..., 0] * self.observe_stepsize
                     - self.observe_update[..., 1] * self.observe_stepsize
                 )
                 world.observe_mm += self.observe_update_mm
+            
+            # Check if all observations are updated, set sample_status accordingly
+            
+            # sample status is false if no updates made
             self.sample_status = (
                 (self.observe_update == False).view(world.batch_size, -1).all(dim=1)
             )
@@ -588,6 +612,8 @@ class NeedleGuide:
             if (
                 self.observe_update == False
             ).all():  # wait until the whole batch find observe
+                
+                 # Sample needles using the MCCL policy ie maximum CCL policy 
                 if self.sample_policy == "mccl":
                     # (batch,num_needle_depths,grid_size,grid_size,num_needle_samples)
                     needle_sampled_all = torch.concat(
@@ -620,6 +646,8 @@ class NeedleGuide:
 
                 elif self.sample_policy == "lesion-centre":
                     # the closest target to needle centre distance
+                    
+                    # distance of lesion centre to needle centre 
                     d_t2n = (
                         (
                             (
@@ -631,10 +659,14 @@ class NeedleGuide:
                         .sum(dim=4)
                         .sqrt()
                     )
+                    
+                    #d_t2n : 
+                    # needle_sampled_idx_flat : flattened indices of selected needle samples
                     d_t2n_min, needle_sampled_idx_flat = torch.min(
                         d_t2n.view(world.batch_size, -1), dim=1
                     )
 
+                    # Calculate normalized needle coordinates based on sampled indices
                     needle_coords_norm = (
                         torch.stack(self.needle_samples_norm, dim=2)
                         .view(world.batch_size, self.num_needle_samples, -1, 3)[
@@ -643,14 +675,21 @@ class NeedleGuide:
                         .view(world.batch_size, self.num_needle_samples, 1, 1, 3)
                     )
 
+                    # # Sample needles and calculate CCL based on normalized coordinates
+                    # needle_asmpled : BATCH_SIZE X 20 X 1 
+                    # needle_coords_norm : BATCH_SIZE X 20 X3  x,y,z 
                     needle_sampled = sampler(
                         world.target.type(torch.float32), needle_coords_norm
                     )
-                    self.ccl_sampled = needle_sampled.squeeze(dim=(1, 3, 4)).sum(dim=1)
+                    
+                    # Combined length for each batch of images 
+                    self.ccl_sampled = needle_sampled.squeeze().sum(dim=1)
 
+                    # Identify sampled needle indices and update sample_x, sample_y, sample_d
                     needle_sampled_idx = (
                         d_t2n == d_t2n_min.view(world.batch_size, 1, 1, 1)
                     ).nonzero()
+                    
                     self.sample_x[
                         needle_sampled_idx[:, 0], needle_sampled_idx[:, 3]
                     ] = True
@@ -661,10 +700,12 @@ class NeedleGuide:
                         needle_sampled_idx[:, 0], needle_sampled_idx[:, 1]
                     ] = True
 
+                print('fuecoco')
 
 ## transition classes
 class DeformationTransition:
     # TODO: base class for other transition classes
+    
     """
     A class for world data (here, gland and target) transition
     """
@@ -689,7 +730,7 @@ class DeformationTransition:
         self.random_transform.generate_random_transform(rate=0.25, scale=0.2)
         transformed_volume = (
             self.random_transform.warp(
-                torch.concat([world.gland, world.target], dim=1).type(torch.float32)
+                torch.cat([world.gland, world.target], dim=1).type(torch.float32)
             )
             >= threshold
         )

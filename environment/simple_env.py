@@ -74,7 +74,7 @@ class TargettingEnv():
         Additionally, to deal with sparse rewards, we can include shaped reward:
         a) Compute distance from current pos to target lesion 
         """
-        
+        pass 
     ############### HELPER FUNCTIONS   ###############
     
     def sample_ax_sag(self, img_vol, pos):
@@ -96,7 +96,7 @@ class TargettingEnv():
                 dim=0,
             )
     
-        def get_reference_grid_mm(self):
+    def get_reference_grid_mm(self):
         # reference_grid_*: (N, D, H, W, 3)
         # N.B. ij indexing for logical indexing, align_corners=True
         return torch.stack(
@@ -216,9 +216,9 @@ if __name__ == '__main__':
         target_env = TargettingEnv(mr, 
                                    us, 
                                    targets, 
-                                   glands)
+                                   gland)
         
-        
+        print('fuecoco')
         
         
         # tpb_envs = TPBEnv(

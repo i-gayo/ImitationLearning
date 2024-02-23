@@ -18,8 +18,8 @@ class SpatialTransform:
                 torch.meshgrid(
                     torch.linspace(-1, 1, self.volsize[2]),
                     torch.linspace(-1, 1, self.volsize[1]),
-                    torch.linspace(-1, 1, self.volsize[0]),
-                    indexing="ij",
+                    torch.linspace(-1, 1, self.volsize[0])
+                    #indexing="ij",
                 ),
                 dim=3,
             )[None, ...]
@@ -64,8 +64,8 @@ class GridTransform(SpatialTransform):
                 torch.meshgrid(
                     torch.linspace(-1, 1, self.grid_size[2]),
                     torch.linspace(-1, 1, self.grid_size[1]),
-                    torch.linspace(-1, 1, self.grid_size[0]),
-                    indexing="ij",
+                    torch.linspace(-1, 1, self.grid_size[0])
+                    #indexing="ij",
                 ),
                 dim=3,
             )[None, ...]
@@ -245,10 +245,21 @@ class GridTransform(SpatialTransform):
 
 ## common functions
 def sampler(vol, coords):
+    """
+    Perform 3D grid sampling on a volume.
+
+    Parameters:
+    - vol: Input volume to be sampled.
+    - coords: Coordinates to sample from in the input volume.
+
+    Returns:
+    - Sampled values based on the input coordinates.
+    """
+    
     return torch.nn.functional.grid_sample(
         input=vol,
-        grid=coords,
+        grid=coords, # Coordinates to sample from
         mode="bilinear",
         padding_mode="zeros",
-        align_corners=True,
+        align_corners=True,# If True, the grid coordinates are assumed to represent the center of pixels
     )
