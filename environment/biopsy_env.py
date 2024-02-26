@@ -826,7 +826,7 @@ class UltrasoundSlicing:
 
         self.update(world)  # get initial observation
 
-    def update(self, world, sample_coords = 'apex'):
+    def update(self, world, sample_coords = 'apex', step = 0):
         """
         Update the object with observed slices based on the specified sample coordinates.
 
@@ -889,28 +889,28 @@ class UltrasoundSlicing:
                 axial = torch.max(world.target[:,:,com_coords[0]:max_coords[0], :, :], dim = 2)[0].unsqueeze(0)
 
             target_slices = [axial, sagittal]
-
-            
-        # Plot for debugging 
-        # from matplotlib import pyplot as plt 
-        # fig, axs = plt.subplots(3,2)
         
-        # # plot gland
-        # for idx, slice in enumerate(gland_slices):
-        #     axs[0,idx].imshow(slice.squeeze().numpy())
-        #     axs[0,idx].axis('off')
-        # for idx,slice in enumerate(target_slices):
-        #     axs[1,idx].imshow(slice.squeeze().numpy())
-        #     axs[1,idx].axis('off')
-        # for idx,slice in enumerate(us_slices):
-        #     axs[2,idx].imshow(slice.squeeze().numpy())
-        #     axs[2,idx].axis('off')
-        # plt.savefig("IMGS/test_AXIAL_SAGITTAL_US.png")
+        # # Plot for debugging 
+        from matplotlib import pyplot as plt 
+        fig, axs = plt.subplots(3,2)
+        
+        # plot gland
+        for idx, slice in enumerate(gland_slices):
+            axs[0,idx].imshow(slice.squeeze().numpy())
+            axs[0,idx].axis('off')
+        for idx,slice in enumerate(target_slices):
+            axs[1,idx].imshow(slice.squeeze().numpy())
+            axs[1,idx].axis('off')
+        for idx,slice in enumerate(us_slices):
+            axs[2,idx].imshow(slice.squeeze().numpy())
+            axs[2,idx].axis('off')
+        plt.savefig(f"IMGS/OBSERVATION-{str(step)}.png")
         
         # gather here all the observed
         self.images_observed = [us_slices, gland_slices, target_slices]
+        obs = self.process_obs(self.images_observed)
         
-        return self.images_observed 
+        return obs 
     
         """debug
         import SimpleITK as sitk
@@ -925,4 +925,22 @@ class UltrasoundSlicing:
         return 0
         """
 
-    
+    def process_obs(self, obs_list):
+            us = [slice.squeeze() for slice in obs_list[0]]
+            gland = [slice.squeeze() for slice in obs_list[1]]
+            target = [slice.squeeze() for slice in obs_list[2]]
+            
+            # Rotate sagital, then stack
+            us[1] = us[1].permute(1,0)
+            gland[1] = gland[1].permute(1,0)
+            target[1] = target[1].permute(1,0)
+            
+            # Stack all slices together 
+            us = torch.stack(us)
+            gland = torch.stack(gland)
+            target = torch.stack(target)
+            
+            obs = torch.cat((us, gland, target)).unsqueeze(0)
+            
+            return obs 
+        

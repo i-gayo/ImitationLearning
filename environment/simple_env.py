@@ -4,6 +4,10 @@ from utils.data_utils import *
 from environment.biopsy_env import * 
 import time 
 import h5py 
+import copy
+import gym 
+import numpy as np
+from gym import spaces 
 
 def normalise_data(img):
     """
@@ -21,8 +25,7 @@ def normalise_data(img):
     
     return norm_img 
     
-    
-class TargettingEnv:
+class TargettingEnv(gym.Env):
     """
     A simple biopsy env that follows simple MDP:
     
@@ -38,11 +41,176 @@ class TargettingEnv:
     Reward :
         + 10 lesion in image
         (-0.1,+) for shaped reward (getting closer to )
-    """
+        
+    Notes:
+            # Get observation at x,y,z positions 
+        # (sagital, axial) us
+        # projection axial gland, target, sagittal gland, target
+        # Update position; sample CCL from target lesion
+        # Return rewards
+        
+    """      
+    def __init__(self, data_sampler, max_steps = 20, deform = False, device = torch.device('cpu')):
+        
+        # Initialising action and observation space
+        self.action_space = spaces.MultiDiscrete(np.array([2,2,2]))
+        self.observation_space = spaces.Box(low=0, high=1.0,
+                                    shape=(6, 128,128), dtype=torch.float32)
+
+        # Sample first patient 
+        self.data_sampler = data_sampler 
+        self.device
+        
+        # Initialise counting positions for termination 
+        self.step_counter = 0 
+        self.max_steps = 20 
+        self.slices_count = 0 # how many observed slices with target are found! 
+        self.min_slices = 3 # how many "slices" to observe before terminating episode 
+        self.deform = deform # whether to deform or not 
+        
+        # Initialise idx map 
+        self.idx_map = {}
+        for idx, val in zip(np.arange(0,14), np.arange(-30,35,5)):
+            self.idx_map[str(val)] = idx
+        
+        # Obtains world coordinates (in mm) and image coordinates
+        self.initialise_world()
+        
+    def step(self, actions = torch.tensor([1,1,1])):
+        """
+        Updates new observation
+        Computes reward 
+        
+        Parameters:
+        -----------
+        actions: 1 x 3 array of actions chosen in range (-1,1)
+        x: +1,-1 correspnds to +5mm,-5mm movement
+        y: +1,-1 corresponds to +5mm,-5mm movement
+        z: +1,-1 corresponds to base, apex  
+        """
+        def map_range(value, old_min=-1, old_max=1, new_min=1, new_max=2):
+            # Linear mapping formula
+            return int(((value - old_min) / (old_max - old_min)) * (new_max - new_min) + new_min)
+
+        # 1. Convert actions from output to positions
+        # if z == 1 base else apex (eg 1=apex; 2 = base)
+        if actions[-1] == -1:
+            test_coords = self.apex_coords
+            z_depth = self.apex
+            sample = 'apex'
+        else:
+            test_coords = self.base_coords 
+            z_depth = self.base 
+            sample = 'base'
+            
+        # 2. Update position, based on actions
+        # TODO: add depth for image slicing!! 
+        # Save grid position 
+        self.grid_pos[:,0:2] += actions[0:2]*5
+        self.grid_pos[:,-1] = map_range(actions[-1])
+        self.prev_pos_mm = copy.deepcopy(self.world.observe_mm) # Save previous position 
+        self.world.observe_mm[:,0:2] += actions[0:2]*5
+        self.world.observe_mm[:,-1] = z_depth
+        print(f"{self.grid_pos}, {self.world.observe_mm}")
+        self.step_counter += 1 # Increase step counter 
+        
+        print('chicken')
+        # 3. Compute new observaiton (sagittal, axial slices)
+        # Deform observatinos first 
+        self.transition.update(self.world, self.action)
+        obs = self.observation.update(self.world, sample, self.step_counter)
+
+        # Stack obs on top of each other 
+        
+        
+        # TODO: 3. Compute CCL metrics, given x,y and depth 
+        
+        
+        # 4. Compute reward based on observations 
+            # ie is lesion visible? 
+            # is lesion sampled (for needle reward or metrics only) -> CCL
+            # include shaped reward : closer to lesion target 
+        
+        reward, contains_lesion = self.compute_reward(obs) 
+        if contains_lesion:
+            self.slices_count += 1
+            
+        # 6. Check if terminated 
+
+        exceeds_step = (self.step_counter >= self.max_steps)
+        lesion_found = (self.slices_count >= self.min_slices) # if found at least min_slices containing lesion
+        terminated = exceeds_step or lesion_found 
+        
+        # 5. Return info, state, reward
+        truncated = None 
+        info = {'num_steps' : self.step_counter, 'slices_count' : self.slices_count,
+                'prev_pos' : self.prev_pos_mm}
+        
+        return obs.squeeze(), reward, terminated, truncated, info
+
+    def reset(self):
+        """
+        Resets all environment variables
+        """  
+        # Initialise counters to 0 
+        self.step_counter = 0 
+        self.slices_count = 0 
+        
+        # Initialise new patient 
+        self.initialise_world()
     
+    ############### REWARD FUNCTIONS   ###############
+        
+    def compute_reward(self, obs, inc_shaped = False, inc_needle = False):
+        """
+        Computes reward based on conditions met
+        
+        Notes:
+        ----------
+        a) Lesion observed : Whether a lesion can be seen in US view 
+        b) Lesion targeted : Whether lesion is sampled effectively (based on depth)
+        
+        Additionally, to deal with sparse rewards, we can include shaped reward:
+        a) Compute distance from current pos to target lesion 
+        """
+        REWARD = 0 
+
+        # Computes reward based on whether lesion is observed in sagittal slice 
+        sagittal_target = obs[:,-1,:,:]
+        # axial_target = obs[:,-2,:,:]
+        
+        # # Debugging plotting 
+        # from matplotlib import pyplot as plt 
+        # fig, axs = plt.subplots(1,2)
+        # axs[0].imshow(sagittal_target.squeeze().numpy())
+        # axs[1].imshow(axial_target.squeeze().numpy())
+        # plt.savefig("IMGS/TARGET-NEW.png")
+        
+        # Check whether sagittal contains lesion 
+        contains_lesion = torch.any(sagittal_target != 0)
+        
+        if contains_lesion:
+            REWARD += 10
+        else:
+            REWARD -= 0.1 # small penalty for not finding lesion 
+
+        if inc_needle:
+            raise NotImplementedError("Not yet implemented needle reward")
+
+        if inc_shaped:
+            raise NotImplementedError("Not yet implemneted needle error")
+        
+        return REWARD, contains_lesion
+    
+    ############### HELPER FUNCTIONS   ###############
+        
     def initialise_world(self):
+        
         # Obtains world coordinates (in mm) and image coordinates
         mr, us, gland, target, target_type, voxdims = self.data_sampler.sample_data()
+        # Move to device
+        mr, us, gland, target = mr.to(self.device), us.to(self.device), gland.to(self.device), target.to(self.device)
+        
         voxdims = [val.item() for val in voxdims]
         
         # Initialise world; start with centre of grid 
@@ -63,8 +231,14 @@ class TargettingEnv:
         
         # Update current grid pos and self.world_observe_mm  : set to middle of grid 
         # Note : grid pos is in grid coords [-30,30] ; world_observe_mm is mm coord space
+        
         self.grid_pos = torch.tensor([[0,0,0]]) # centre of prostate 
         self.world.observe_mm[:,0:2] += self.prostate_centroid[0:2].reshape(1,2)
+        
+        # Initialise which samples have been sampled! 
+        self.sample_x = torch.full((13,), False, dtype=torch.bool)
+        self.sample_y = torch.full((13,), False, dtype=torch.bool)
+        self.sample_d = torch.full((2,), False, dtype = torch.bool)
         
         ##### Get initial observations : mid-gland, centre of grid 
         # coomment out action update as no actions yet 
@@ -76,11 +250,16 @@ class TargettingEnv:
         
         # Obtain initial obseravtions
         # consists of gland axial + sagital; target axial
-        us, gland, target = self.observation.update(self.world)
+        initial_obs = self.observation.update(self.world)
         
         #us = torch.stack(us)
-        initial_obs = [us,gland,target]
+        #initial_obs = [us,gland,target]§
         # construct initial obs : stack us, gland and target together 
+        
+        # initialise sample_x -30,30 -> 0- 13
+        idx_map = {}
+        for idx, val in zip(np.arange(0,14), np.arange(-30,35,5)):
+            idx_map[str(val)] = idx
         
         # Testing something:
         #self.action.update(self.world, self.observation)
@@ -89,86 +268,7 @@ class TargettingEnv:
         # plt.imshow(np.max(target.squeeze()[:,:,:].numpy(), axis = 2))
         # plt.savefig("IMGS/LESION_MASK.png")
         return initial_obs
-               
-    def __init__(self, data_sampler, max_steps = 20, deform = False):
-        
-        # Sample first patient 
-        self.data_sampler = data_sampler 
-        
-        # Initialise counting positions for termination 
-        self.step_counter = 0 
-        self.max_steps = 20 
-        self.deform = deform # whether to deform or not 
-        
-        # Obtains world coordinates (in mm) and image coordinates
-        self.initialise_world()
-        
-    def step(self, actions = torch.tensor([1,1,1])):
-        """
-        Updates new observation
-        Computes reward 
-        
-        Parameters:
-        -----------
-        actions: 1 x 3 array of actions chosen in range (-1,1)
-        x: +1,-1 correspnds to +5mm,-5mm movement
-        y: +1,-1 corresponds to +5mm,-5mm movement
-        z: +1,-1 corresponds to apex, base 
-        """
-        
-        # 1. Convert actions from output to positions
-        # if z == 1 base else apex (eg 1=apex; 2 = base)
-        if actions[-1] == -1:
-            test_coords = self.apex_coords
-        else:
-            test_coords = self.base_coords 
-        
-        # Update x,y positions! 
-        self.grid_pos[:,0:2] += actions[0:2]*5
-        self.world.observe_mm[:,0:2] += actions[0:2]*5
-        
-        print(f"{self.grid_pos}, {self.world.observe_mm}")
-        
-        print('chicken')
-        # 2. Update position, based on actions
-        
-        # 3. Compute new observaiton (sagittal, axial slices)
-        
-        # 4. Compute reward based on observations 
-            # ie is lesion visible? 
-            
-        # 5. Return info, state, reward
-        
-                # Sample action x,y,z 
-        
-        # Get observation at x,y,z positions 
-        # (sagital, axial) us
-        # projection axial gland, target, sagittal gland, target
-        
-        # Update position; sample CCL from target lesion
-
-        # Return rewards
-        
-        pass 
-    
-    
-        
-    def compute_reward(self):
-        """
-        Computes reward based on conditions met
-        
-        Notes:
-        ----------
-        a) Lesion observed : Whether a lesion can be seen in US view 
-        b) Lesion targeted : Whether lesion is sampled effectively (based on depth)
-        
-        Additionally, to deal with sparse rewards, we can include shaped reward:
-        a) Compute distance from current pos to target lesion 
-        """
-        pass 
-    
-    ############### HELPER FUNCTIONS   ###############
-    
+         
     def initialise_grid_coords(self):
         """
         Initialises apex and base needle sample coords for sampling!!1
@@ -205,6 +305,10 @@ class TargettingEnv:
         min_z = self.prostate_coords[:,-1].min()
         apex = (min_z + mid_gland)/2 # mid way between beginning of gland, and mid-gland
         base = (max_z + mid_gland)/2 # midway between base of gland base
+        
+        # Save apex and base coords
+        self.apex = apex
+        self.base = base
         
         # Compute mesh grids for 13 x 13 x 2 grid 
         needle_length = 20 
@@ -246,16 +350,6 @@ class TargettingEnv:
 
         return apex_mesh_centred, base_mesh_centred
         
-  
-    def sample_ax_sag(self, img_vol, pos):
-        """
-        Samples axial / sagittal slice, given position of x,y,z in grid / depth
-        """
-        pass
-    
-    def compute_current_pos(self):
-        pass 
-    
     # def initialise_coords_mm(self, gland):
     #     # Initialise coords based on mm 
     #     pass
@@ -306,19 +400,8 @@ class TargettingEnv:
             self.reference_grid_mm[b, mask.squeeze(dim=1)[b, ...], :]
             for b in range(self.batch_size)
         ]
-            
-    def initialise_state(self):
-        
-        # Start at the centre of the grid
-        
-        # Initialise grid coords based on sampled cords
-        pass 
     
-    def reset(self):
-        """
-        Resets all environment variables
-        """  
-        pass 
+
  
 if __name__ == '__main__':
     
