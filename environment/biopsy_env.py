@@ -2,6 +2,35 @@ import torch
 
 from environment.utils import GridTransform, sampler
 
+def center_of_mass_3d(volume):
+    """
+    Compute the center of mass of a 3D volume.
+
+    Args:
+    - volume (torch.Tensor): Input 3D volume tensor.
+
+    Returns:
+    - torch.Tensor: Coordinates of the center of mass in the format (x, y, z).
+    """
+    volume = volume.squeeze()
+    
+    # Create coordinate grids
+    x_coords, y_coords, z_coords = torch.meshgrid(
+        torch.arange(volume.shape[2], dtype=torch.float32),
+        torch.arange(volume.shape[1], dtype=torch.float32),
+        torch.arange(volume.shape[0], dtype=torch.float32)
+    )
+
+    # Compute the mass
+    mass = volume.sum()
+
+    # Compute the weighted average of coordinates
+    center_x = (x_coords * volume).sum() / mass
+    center_y = (y_coords * volume).sum() / mass
+    center_z = (z_coords * volume).sum() / mass
+
+    return torch.tensor([center_x.item(), center_y.item(), center_z.item()], dtype=torch.int)
+
 
 ## main env classes
 class TPBEnv:
@@ -797,9 +826,26 @@ class UltrasoundSlicing:
 
         self.update(world)  # get initial observation
 
-    def update(self, world):
+    def update(self, world, sample_coords = 'apex'):
+        """
+        Update the object with observed slices based on the specified sample coordinates.
+
+        Args:
+        - world: The world object containing data (assumed to have 'observe_norm', 'gland', 'us', and 'target' attributes).
+        - sample_coords (str): Determines the sampling coordinates ('apex', 'base', or None for initial steps).
+
+        Returns:
+        - list: List containing observed slices for ultrasound, gland, and target.
+
+        Notes:
+        - This function assumes that the world object has 'observe_norm', 'gland', 'us', and 'target' attributes.
+        - The 'sampler' function is assumed to take a tensor and coordinates and return sampled slices.
+        - The 'center_of_mass_3d' function is assumed to compute the center of mass of a 3D volume.
+        """
+    
         # transformation TODO: add rotation for non-orthogonal reslicing
         # Coordinates of each slice
+        
         slices_norm = [
             s + world.observe_norm.view(world.batch_size, 1, 1, 1, 3)
             for s in self.reference_observe_slices_norm
@@ -809,31 +855,57 @@ class UltrasoundSlicing:
         gland_slices = [
             sampler(world.gland.type(torch.float32), g) for g in slices_norm
         ]
-        target_slices = [
-            sampler(world.target.type(torch.float32), g) for g in slices_norm
-        ]
-        
+
         us_slices = [
             sampler(world.us.type(torch.float32), g) for g in slices_norm
         ]
         
+        # For target slices : use axial projection, keep sagittal as is 
+        if sample_coords == None:
+            # Ie initial steps -> share axial slices from original depth 
+            
+            target_slices = [
+                sampler(world.target.type(torch.float32), g) for g in slices_norm
+            ]
+        
+        else:
+            # Do maximum intensity projection for world.target for all apex/ base coords 
+            # Keep sagittla projection 
+            _, sagittal = [
+                sampler(world.target.type(torch.float32), g) for g in slices_norm
+            ]
+            
+            # in z,x,y
+            non_zero_coords = torch.nonzero(world.target.squeeze(), as_tuple=True)
+            com_coords = [val.item() for val in center_of_mass_3d(world.target.squeeze())]
+            min_coords = [int(torch.min(val)) for val in non_zero_coords]
+            max_coords = [int(torch.max(val)) for val in non_zero_coords]
+            
+            # Obtain "axial" projection of all slices within apex/ base to show lesion is within region chosen
+            # Obtain 2d projection 
+            if sample_coords == 'apex':
+                axial = torch.max(world.target[:,:,min_coords[0]:com_coords[0], :, :], dim = 2)[0].unsqueeze(0)
+            else:
+                axial = torch.max(world.target[:,:,com_coords[0]:max_coords[0], :, :], dim = 2)[0].unsqueeze(0)
+
+            target_slices = [axial, sagittal]
+
+            
         # Plot for debugging 
-        from matplotlib import pyplot as plt 
-        fig, axs = plt.subplots(3,2)
+        # from matplotlib import pyplot as plt 
+        # fig, axs = plt.subplots(3,2)
         
-        # plot gland
-        for idx, slice in enumerate(gland_slices):
-            axs[0,idx].imshow(slice.squeeze().numpy())
-            axs[0,idx].axis('off')
-        for idx,slice in enumerate(target_slices):
-            axs[1,idx].imshow(slice.squeeze().numpy())
-            axs[1,idx].axis('off')
-        for idx,slice in enumerate(us_slices):
-            axs[2,idx].imshow(slice.squeeze().numpy())
-            axs[2,idx].axis('off')
-        plt.savefig("IMGS/AXIAL_SAGITTAL_US.png")
-        
-        # plot target 
+        # # plot gland
+        # for idx, slice in enumerate(gland_slices):
+        #     axs[0,idx].imshow(slice.squeeze().numpy())
+        #     axs[0,idx].axis('off')
+        # for idx,slice in enumerate(target_slices):
+        #     axs[1,idx].imshow(slice.squeeze().numpy())
+        #     axs[1,idx].axis('off')
+        # for idx,slice in enumerate(us_slices):
+        #     axs[2,idx].imshow(slice.squeeze().numpy())
+        #     axs[2,idx].axis('off')
+        # plt.savefig("IMGS/test_AXIAL_SAGITTAL_US.png")
         
         # gather here all the observed
         self.images_observed = [us_slices, gland_slices, target_slices]
