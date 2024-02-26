@@ -9,6 +9,11 @@ import gym
 import numpy as np
 from gym import spaces 
 
+def map_range(value, old_min=0, old_max=1, new_min=1, new_max=2):
+    # Linear mapping formula
+    return int(((value - old_min) / (old_max - old_min)) * (new_max - new_min) + new_min)
+
+
 def normalise_data(img):
     """
     Normalises labels and images 
@@ -55,11 +60,11 @@ class TargettingEnv(gym.Env):
         # Initialising action and observation space
         self.action_space = spaces.MultiDiscrete(np.array([2,2,2]))
         self.observation_space = spaces.Box(low=0, high=1.0,
-                                    shape=(6, 128,128), dtype=torch.float32)
+                                    shape=(6, 120,128), dtype=np.float32)
 
         # Sample first patient 
         self.data_sampler = data_sampler 
-        self.device
+        self.device = device
         
         # Initialise counting positions for termination 
         self.step_counter = 0 
@@ -88,13 +93,10 @@ class TargettingEnv(gym.Env):
         y: +1,-1 corresponds to +5mm,-5mm movement
         z: +1,-1 corresponds to base, apex  
         """
-        def map_range(value, old_min=-1, old_max=1, new_min=1, new_max=2):
-            # Linear mapping formula
-            return int(((value - old_min) / (old_max - old_min)) * (new_max - new_min) + new_min)
 
         # 1. Convert actions from output to positions
         # if z == 1 base else apex (eg 1=apex; 2 = base)
-        if actions[-1] == -1:
+        if actions[-1] == 0:
             test_coords = self.apex_coords
             z_depth = self.apex
             sample = 'apex'
@@ -106,32 +108,32 @@ class TargettingEnv(gym.Env):
         # 2. Update position, based on actions
         # TODO: add depth for image slicing!! 
         # Save grid position 
-        self.grid_pos[:,0:2] += actions[0:2]*5
-        self.grid_pos[:,-1] = map_range(actions[-1])
-        self.prev_pos_mm = copy.deepcopy(self.world.observe_mm) # Save previous position 
-        self.world.observe_mm[:,0:2] += actions[0:2]*5
-        self.world.observe_mm[:,-1] = z_depth
-        print(f"{self.grid_pos}, {self.world.observe_mm}")
+
+        # self.grid_pos[:,0:2] += actions[0:2]*5
+        # self.grid_pos[:,-1] = map_range(actions[-1])
+        # self.prev_pos_mm = copy.deepcopy(self.world.observe_mm) # Save previous position 
+        # self.world.observe_mm[:,0:2] += actions[0:2]*5
+        # self.world.observe_mm[:,-1] = z_depth
+        # print(f"{self.grid_pos}, {self.world.observe_mm}")
+        self.update_pos(actions, z_depth)
         self.step_counter += 1 # Increase step counter 
         
-        print('chicken')
+        #print('chicken')
         # 3. Compute new observaiton (sagittal, axial slices)
         # Deform observatinos first 
         self.transition.update(self.world, self.action)
         obs = self.observation.update(self.world, sample, self.step_counter)
 
-        # Stack obs on top of each other 
-        
-        
         # TODO: 3. Compute CCL metrics, given x,y and depth 
-        
-        
+        ccl = self.compute_ccl(obs, test_coords)
+        print(f"Idx : {self.step_counter-1} : CCL sampled : {ccl}")
         # 4. Compute reward based on observations 
             # ie is lesion visible? 
             # is lesion sampled (for needle reward or metrics only) -> CCL
             # include shaped reward : closer to lesion target 
         
         reward, contains_lesion = self.compute_reward(obs) 
+        
         if contains_lesion:
             self.slices_count += 1
             
@@ -143,8 +145,11 @@ class TargettingEnv(gym.Env):
         
         # 5. Return info, state, reward
         truncated = None 
-        info = {'num_steps' : self.step_counter, 'slices_count' : self.slices_count,
-                'prev_pos' : self.prev_pos_mm}
+        info = {'num_steps' : self.step_counter, 
+                'slices_count' : self.slices_count,
+                'prev_pos' : self.prev_pos_mm,
+                'current_pos' : self.world.observe_mm,
+                'ccl' : ccl}
         
         return obs.squeeze(), reward, terminated, truncated, info
 
@@ -157,10 +162,73 @@ class TargettingEnv(gym.Env):
         self.slices_count = 0 
         
         # Initialise new patient 
-        self.initialise_world()
+        initial_obs = self.initialise_world()
+        
+        return initial_obs 
     
     ############### REWARD FUNCTIONS   ###############
+    
+            
+    def update_pos(self, actions, z_depth):
         
+        # Save previous position 
+        self.prev_pos_mm = copy.deepcopy(self.world.observe_mm)
+        
+        x_check = self.grid_pos[:,0] + actions[0]*5
+        y_check = self.grid_pos[:,1] + actions[1]*5
+        
+        # Do not update x if more than 30 
+        
+        if x_check > 30:
+            print(f"Outside grid boundaries x=+30")
+            x_check = 30 
+        elif x_check < -30:
+            print(f"Outside grid boundaries x=-30")
+            x_check = -30 
+        else:
+            # Update if not within boundaries
+            self.world.observe_mm[:,0] += actions[0]*5
+            
+        if y_check > 30:
+            print(f"Outside grid boundaries y=+30")
+            y_check = 30 
+        elif y_check < -30:
+            print(f"Outside grid boundaries y=-30")
+            y_check = -30 
+        else:
+            # Update if not within boundaries
+            self.world.observe_mm[:,1] += actions[1]*5
+        
+        # Set depths for observe_mm, grid pos respectively 
+        self.grid_pos[:,0:2] = torch.tensor([x_check,y_check])
+        self.grid_pos[:,-1] = map_range(actions[-1])
+        self.world.observe_mm[:,-1] = z_depth
+        
+        print(f"New positions {self.grid_pos}, {self.world.observe_mm}")
+        
+            
+    def compute_ccl(self, obs, needle_coords):
+        """
+        Computes CCL
+        """  
+        
+        # from grid_pos 
+        grid_pos = self.grid_pos 
+        x_pos = str(grid_pos[0][0].item())
+        y_pos = str(grid_pos[0][1].item())
+        
+        # needle_coords_norm = batch_size x 20 x 1 x 1 x 3 where 20 is depths; 3 is x,y,z
+        needle_sampled_coords = needle_coords[:,self.idx_map[x_pos], self.idx_map[y_pos],:].unsqueeze(1).unsqueeze(1).unsqueeze(0)
+        #needle_coords_norm : needle_coords_norm ([4, 20, 1, 1, 3]) choose grid position we are currently at! 
+        
+        needle_sampled = sampler(
+            self.world.target.type(torch.float32), needle_sampled_coords)
+        
+        # Combined length for each batch of images 
+        self.ccl_sampled = needle_sampled.squeeze().sum(dim=0)
+        
+        return self.ccl_sampled 
+    
     def compute_reward(self, obs, inc_shaped = False, inc_needle = False):
         """
         Computes reward based on conditions met
@@ -257,9 +325,9 @@ class TargettingEnv(gym.Env):
         # construct initial obs : stack us, gland and target together 
         
         # initialise sample_x -30,30 -> 0- 13
-        idx_map = {}
+        self.idx_map = {}
         for idx, val in zip(np.arange(0,14), np.arange(-30,35,5)):
-            idx_map[str(val)] = idx
+            self.idx_map[str(val)] = idx
         
         # Testing something:
         #self.action.update(self.world, self.observation)
@@ -335,8 +403,12 @@ class TargettingEnv(gym.Env):
                     ]  
         base_mesh_centred = base_mesh + self.prostate_centroid
         
-        
+        # needle_coords_norm : normalised 
+        self.unit_dims = self.world.unit_dims
+        self.apex_mesh_centred_norm = apex_mesh_centred/self.unit_dims
+        self.base_mesh_centred_norm = base_mesh_centred/self.unit_dims
     
+        #')
         # os.makedirs("IMGS", exist_ok = True)
         # fig, axs = plt.subplots(1,2)
         # slice_num = int(64.0 + target_z)
