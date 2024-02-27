@@ -58,7 +58,7 @@ class TargettingEnv(gym.Env):
     def __init__(self, data_sampler, max_steps = 20, deform = False, device = torch.device('cpu')):
         
         # Initialising action and observation space
-        self.action_space = spaces.MultiDiscrete(np.array([2,2,2]))
+        self.action_space = spaces.MultiDiscrete(np.array([3,3,2]))
         self.observation_space = spaces.Box(low=0, high=1.0,
                                     shape=(6, 120,128), dtype=np.float32)
 
@@ -115,6 +115,8 @@ class TargettingEnv(gym.Env):
         # self.world.observe_mm[:,0:2] += actions[0:2]*5
         # self.world.observe_mm[:,-1] = z_depth
         # print(f"{self.grid_pos}, {self.world.observe_mm}")
+        # Convert actions from (0,1) -> -1,1 
+
         self.update_pos(actions, z_depth)
         self.step_counter += 1 # Increase step counter 
         
@@ -122,17 +124,19 @@ class TargettingEnv(gym.Env):
         # 3. Compute new observaiton (sagittal, axial slices)
         # Deform observatinos first 
         self.transition.update(self.world, self.action)
-        obs = self.observation.update(self.world, sample, self.step_counter)
+        obs = self.observation.update(self.world, sample, self.step_counter).to(self.device)
 
         # TODO: 3. Compute CCL metrics, given x,y and depth 
         ccl = self.compute_ccl(obs, test_coords)
-        print(f"Idx : {self.step_counter-1} : CCL sampled : {ccl}")
+        #print(f"Idx : {self.step_counter-1} : CCL sampled : {ccl}")
         # 4. Compute reward based on observations 
             # ie is lesion visible? 
             # is lesion sampled (for needle reward or metrics only) -> CCL
             # include shaped reward : closer to lesion target 
         
         reward, contains_lesion = self.compute_reward(obs) 
+        
+        print(f"Step : {self.step_counter-1}  CCL sampled : {ccl} Reward : {reward}")
         
         if contains_lesion:
             self.slices_count += 1
@@ -149,9 +153,10 @@ class TargettingEnv(gym.Env):
                 'slices_count' : self.slices_count,
                 'prev_pos' : self.prev_pos_mm,
                 'current_pos' : self.world.observe_mm,
-                'ccl' : ccl}
+                'grid_pos' : self.grid_pos, 
+                'ccl' : ccl.item()}
         
-        return obs.squeeze(), reward, terminated, truncated, info
+        return obs.squeeze().cpu(), reward, terminated, info
 
     def reset(self):
         """
@@ -164,12 +169,27 @@ class TargettingEnv(gym.Env):
         # Initialise new patient 
         initial_obs = self.initialise_world()
         
-        return initial_obs 
+        return initial_obs.cpu()
     
     ############### REWARD FUNCTIONS   ###############
     
+    def get_target(self):
+        """
+        Returns target and computes centroid 
+        """
+        
+        img_coords = torch.nonzero(self.world.target.squeeze(), as_tuple=True)
+        mm_coords = self.target_centroid
+        
+        return self.world.target, img_coords, mm_coords 
             
-    def update_pos(self, actions, z_depth):
+    def update_pos(self, raw_actions, z_depth):
+        
+        # Normalise actions in ranges required 
+        actions = np.zeros_like(raw_actions)
+        actions[0] = map_range(raw_actions[0],old_min=0, old_max=1, new_min=-1, new_max=1)
+        actions[1] = map_range(raw_actions[1],old_min=0, old_max=1, new_min=-1, new_max=1)
+        actions[2] = map_range(raw_actions[2], old_min = 0, old_max =1 , new_min = 1, new_max = 2)
         
         # Save previous position 
         self.prev_pos_mm = copy.deepcopy(self.world.observe_mm)
@@ -201,7 +221,7 @@ class TargettingEnv(gym.Env):
         
         # Set depths for observe_mm, grid pos respectively 
         self.grid_pos[:,0:2] = torch.tensor([x_check,y_check])
-        self.grid_pos[:,-1] = map_range(actions[-1])
+        self.grid_pos[:,-1] = actions[-1] # changed from map_ragnge as this is done above code 
         self.world.observe_mm[:,-1] = z_depth
         
         print(f"New positions {self.grid_pos}, {self.world.observe_mm}")
@@ -217,9 +237,12 @@ class TargettingEnv(gym.Env):
         x_pos = str(grid_pos[0][0].item())
         y_pos = str(grid_pos[0][1].item())
         
+        # [0,20]is good but not depth!
         # needle_coords_norm = batch_size x 20 x 1 x 1 x 3 where 20 is depths; 3 is x,y,z
         needle_sampled_coords = needle_coords[:,self.idx_map[x_pos], self.idx_map[y_pos],:].unsqueeze(1).unsqueeze(1).unsqueeze(0)
         #needle_coords_norm : needle_coords_norm ([4, 20, 1, 1, 3]) choose grid position we are currently at! 
+        
+        print(f"Needle sampled coords : {needle_sampled_coords.squeeze().item()}")
         
         needle_sampled = sampler(
             self.world.target.type(torch.float32), needle_sampled_coords)
@@ -396,11 +419,11 @@ class TargettingEnv(gym.Env):
         # in z, x, y form!!! 
         apex_mesh = torch.stack(torch.meshgrid(z_apex, self.y_grid.float(), self.x_grid.float()), dim=3)[
                         ..., [2, 1, 0]
-                    ]
+                    ].to(self.world.target.device)
         apex_mesh_centred = apex_mesh + self.prostate_centroid
         base_mesh = torch.stack(torch.meshgrid(z_base, self.y_grid.float(), self.x_grid.float()),dim=3)[
                         ..., [2, 1, 0]
-                    ]  
+                    ]  .to(self.world.target.device)
         base_mesh_centred = base_mesh + self.prostate_centroid
         
         # needle_coords_norm : normalised 
