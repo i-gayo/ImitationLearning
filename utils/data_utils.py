@@ -7,10 +7,168 @@ import SimpleITK as sitk
 import torch.nn as nn 
 # TODO: Convert MR images to US 
 import torch 
-import matplotlib
-matplotlib.use('Tkagg')
+#import matplotlib
+#matplotlib.use('Tkagg')
 from matplotlib import pyplot as plt 
+import nibabel as nib
 
+class BiopsyDataset:
+    """
+    Dataset for sampling biopsy images 
+    """
+    
+    def __init__(self, dir_name, 
+                 mode, 
+                 give_fake = False,
+                 sub_mode = 'train'):
+        self.dir_name = dir_name 
+        self.mode = mode 
+        self.sub_mode = sub_mode # whehter to use subsect of dataset for training or validation 
+        
+        # obtain list of names for us and mri labels 
+        self.us_names = os.listdir(os.path.join(dir_name, mode, 'us_images'))
+        self.us_label_names = os.listdir(os.path.join(dir_name, mode, 'us_labels'))
+        self.mri_names = os.listdir(os.path.join(dir_name, mode, 'mr_images'))
+        self.mri_label_names = os.listdir(os.path.join(dir_name, mode, 'mr_labels'))
+        self.num_data = len(self.us_names)
+        # Load folder path 
+        
+        # Load items 
+        if give_fake: 
+            print(f"Using fake images")
+            folder_us = 'fake_us_images'
+        else:
+            print(f"Using real images")
+            folder_us = 'us_images'
+            
+        self.us_data = [torch.tensor(nib.load(os.path.join(dir_name, mode, folder_us, self.us_names[i])).get_fdata().squeeze()) for i in range(self.num_data)]
+        self.us_labels = [torch.tensor(nib.load(os.path.join(dir_name, mode,'us_labels', self.us_label_names[i])).get_fdata()) for i in range(self.num_data)]
+        self.mri_data = [torch.tensor(nib.load(os.path.join(dir_name, mode, 'mr_images', self.mri_names [i])).get_fdata().squeeze()) for i in range(self.num_data)]
+        self.mri_labels = [torch.tensor(nib.load(os.path.join(dir_name, mode, 'mr_labels', self.mri_label_names [i])).get_fdata().squeeze()) for i in range(self.num_data)]
+        
+        # TODO : find index of where there are targets available!!!
+        WITH = []
+        WITHOUT = []
+        for i in range(self.num_data):
+            label = self.mri_labels[i]
+            with_target = torch.unique(torch.where(label[:,:,:,1:] == 1.0)[-1])
+            if len(with_target) > 0:
+                WITH.append(i)
+            else:
+                WITHOUT.append(i)
+        
+        self.with_target = WITH
+        self.without_target = WITHOUT
+        
+        if self.mode == 'test':
+            
+            if self.sub_mode == 'train':
+                self.num_patients = 15 # use 15 for training 
+            else:
+                self.num_patients = 5 # 5 for validating 
+        
+        # no submode for test patients
+        else:
+            self.num_patients = len(self.with_target)
+        
+        # Load voxdims of data 
+        test_img = (nib.load(os.path.join(dir_name, mode, folder_us, self.us_names[0])))
+        self.voxdims = test_img.header.get_zooms()[1:]
+        
+        print('chicken')
+        
+    def __getitem__(self, i):
+        
+        #upsample_us = self.resample(self.us_data[idx])
+        #upsample_us_labels = self.resample(self.us_labels[idx], label = True)
+
+        if self.mode == 'test':
+            
+            if self.sub_mode == 'train':
+                idx_val = np.arange(0,15)[i]
+            else:
+                idx_val = np.arange(15,20)[i]
+            
+            idx = self.with_target[idx_val]
+            
+        else:
+            
+            idx = self.with_target[i]
+        
+        #print(f" {i} idx :{idx}")
+        # no need to transpose if alligned alerady
+        us = self.us_data[idx]
+        us_label = self.us_labels[idx]
+
+        # Add dimesion for "channel"
+        mr_data = self.mri_data[idx].unsqueeze(0)
+        mr_label = self.mri_labels[idx].unsqueeze(0)
+        #mr_label = mr_label[:,:,:,:,0]       # use only prostate label
+        
+        # normalise data 
+        mr = self.normalise_data(mr_data)
+        us = self.normalise_data(us)
+        mr_label = self.normalise_data(mr_label)
+        us_label = self.normalise_data(us_label)
+
+        gland = 1.0*(us_label[:,:,:,0]>=0.5)
+        
+        # Choose a target with non-zero vals        
+        # Checks which targets are non-empty for us label
+        t_idx = torch.unique(torch.where((mr_label[:,:,:,:,1:]) == 1)[-1])
+        
+        # Return lesion mask from MR registered!!!
+        
+        if len(t_idx) == 0:
+            target = mr_label[:,:,:,:,1].squeeze()
+            target_type = 'None'
+        else:
+            # Randomly sample target / ROI
+            if 0 in t_idx: # ie lesion available, use this 
+                # add t_idx+1 because 1st index is prostate gland!!
+                target = mr_label[:,:,:,:,t_idx[0]+1].squeeze()
+                target_type = 'Lesion'
+            # if no lesion available, use calcification / 
+            else:
+                roi_idx = np.random.choice(t_idx)
+                target = mr_label[:,:,:,:,roi_idx+1].squeeze()
+                target_type = 'Other'
+            
+            # TODO: change dimensions from height width depth to depth widht height for yipeng's code!!!!
+            mr = self.change_order(mr)
+            us = self.change_order(us.unsqueeze(0))
+            gland = self.change_order(gland.unsqueeze(0))
+            target = 1.0*(self.change_order(target.unsqueeze(0)) >= 0.5)
+            
+        return mr, us, gland, target, target_type, self.voxdims
+    
+    def __len__(self):
+        return self.num_patients
+    
+    def normalise_data(self, img):
+        """
+        Normalises labels and images 
+        """
+        
+        min_val = torch.min(img)
+        max_val = torch.max(img)
+        
+        if max_val == 0: 
+            #print(f"Empty mask, not normalised img")
+            norm_img = img # return as 0s only if blank image or volume 
+        else: 
+            norm_img = (img - min_val) / (max_val - min_val)
+        
+        return norm_img 
+    
+    def change_order(self, tensor_data):
+        """
+        Changes order of tensor from width height depth to edpth width height 
+        """
+        
+        return tensor_data.permute(0,3,1,2)
+ 
+ 
 class MR2US:
     """
     Class which implements conversion from MR2US to obtain US slices
