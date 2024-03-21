@@ -20,7 +20,10 @@ class BiopsyDataset:
     def __init__(self, dir_name, 
                  mode, 
                  give_fake = False,
-                 sub_mode = 'train'):
+                 sub_mode = 'train',
+                 use_all = True,
+                 num_train = 5):
+        
         self.dir_name = dir_name 
         self.mode = mode 
         self.sub_mode = sub_mode # whehter to use subsect of dataset for training or validation 
@@ -31,6 +34,9 @@ class BiopsyDataset:
         self.mri_names = os.listdir(os.path.join(dir_name, mode, 'mr_images'))
         self.mri_label_names = os.listdir(os.path.join(dir_name, mode, 'mr_labels'))
         self.num_data = len(self.us_names)
+        self.use_all = use_all 
+        self.num_train = num_train # number to train with and validate with after! 
+        
         # Load folder path 
         
         # Load items 
@@ -62,12 +68,22 @@ class BiopsyDataset:
         
         if self.mode == 'test':
             
-            if self.sub_mode == 'train':
-                self.num_patients = 15 # use 15 for training 
+            if self.use_all: 
+                if self.sub_mode == 'train':
+                    self.num_patients = 15 # use 15 for training 
+                else:
+                    self.num_patients = 5 # 5 for validating 
+            
+            # using subset for training 
             else:
-                self.num_patients = 5 # 5 for validating 
-        
+                if self.sub_mode == 'train':
+                    self.num_patients = self.num_train # use n number for training! 
+                    
+                else:
+                    self.num_patients = 5 # 5 for validating 
+                    
         # no submode for test patients
+        
         else:
             self.num_patients = len(self.with_target)
         
@@ -84,12 +100,24 @@ class BiopsyDataset:
 
         if self.mode == 'test':
             
-            if self.sub_mode == 'train':
-                idx_val = np.arange(0,15)[i]
+            if self.use_all: 
+                # if using all, split into 15 train 5 validation 
+                if self.sub_mode == 'train':
+                    idx_val = np.arange(0,15)[i]
+                else:
+                    idx_val = np.arange(15,20)[i]
+                
+                idx = self.with_target[idx_val]
+                
             else:
-                idx_val = np.arange(15,20)[i]
-            
-            idx = self.with_target[idx_val]
+                # if using some, split into 5 train, 5 validation 
+                
+                if self.sub_mode == 'train':
+                    idx_val = np.arange(0,self.num_train)[i] # use first N number of patients to train with 
+                else:
+                    idx_val = np.arange(15,20)[i] # use last 5
+                
+                idx = self.with_target[idx_val]
             
         else:
             
