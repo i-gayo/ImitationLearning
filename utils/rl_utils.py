@@ -19,6 +19,86 @@ from stable_baselines3.common import results_plotter
 from stable_baselines3.common.logger import Figure
 from utils.Prostate_dataloader import * 
 
+class SaveOnBestTrainingReward_single(BaseCallback):
+    """
+    Callback for saving a model (the check is done every ``check_freq`` steps)
+    based on the training reward (in practice, we recommend using ``EvalCallback``).
+
+    :param check_freq: (int)
+    :param log_dir: (str) Path to the folder where the model will be saved.
+      It must contains the file created by the ``Monitor`` wrapper.
+    :param verbose: (int)
+    """
+    def __init__(self, check_freq: int, log_dir: str, verbose=1):
+        super(SaveOnBestTrainingReward_single, self).__init__(verbose)
+        self.check_freq = check_freq
+        self.log_dir = log_dir
+        self.save_path = os.path.join(log_dir, 'best_model')
+        self.best_mean_reward = -np.inf
+        self.best_mean_reward_std = np.inf
+
+    def _init_callback(self) -> None:
+        # Create folder if needed
+        if self.save_path is not None:
+            os.makedirs(self.save_path, exist_ok=True)
+
+    def _on_step(self) -> bool:
+        if self.n_calls % self.check_freq == 0:
+
+          # Retrieve training reward
+          df_training = load_results(self.log_dir)
+          x, y = ts2xy(df_training, 'timesteps')
+        
+          efficiency = np.nanmean(df_training.efficiency.values)
+          ccl_corr = np.nanmean(df_training.ccl_corr_online.values)
+          hit_rate = np.nanmean(df_training.hit_rate.values)
+          num_needles = np.nanmean(df_training.num_needles.values)
+          num_needles_hit = np.nanmean(df_training.num_needles_hit.values)
+          #ccl_plots = df_training.ccl_plots.values
+          lesion_sizes = df_training.all_lesion_size.values
+          ccl_vals = df_training.all_ccl.values
+
+          #Convert lesion size and ccl vals to plot 
+          lesion_list = np.concatenate([ast.literal_eval(lesion) for lesion in lesion_sizes])
+          ccl_list = np.concatenate([ast.literal_eval(ccl) for ccl in ccl_vals])
+          #figure_plot = plt.figure()
+          #plt.scatter(lesion_list , ccl_list)
+          #plt.xlabel("Lesion sizes (number of voxels)")
+          #plt.ylabel("CCL (mm)")
+          #ccl_fig = plt.gcf()
+          
+          self.logger.record('metrics/ccl_coef', ccl_corr)
+          self.logger.record('metrics/hit_rate', hit_rate)
+          self.logger.record('metrics/efficiency' , efficiency)
+          self.logger.record('needles/num_needles' , num_needles)
+          self.logger.record('needles/num_needles_hit' , num_needles_hit)
+          # Plot last data (most updaetd CCL batch size)
+          #self.logger.record("metrics/ccl_plots", Figure(ccl_fig, close=True), exclude=("stdout", "log", "json", "csv"))
+          plt.close()
+
+          if len(x) > 0:
+              # Mean training reward over the last 100 episodes
+              mean_reward = np.nanmean(y[-self.check_freq:])
+              std_reward = np.nanstd(y[-self.check_freq:])
+
+              if self.verbose > 0:
+                print(f"Num timesteps: {self.num_timesteps}")
+                print(f"\n EVALUATING AVERAGE REWARD:  \
+                      Best mean reward: {self.best_mean_reward:.2f} +/- {self.best_mean_reward_std:.2f} \
+                - Last mean reward per episode: {mean_reward:.2f} +/- {std_reward:.2f}")
+
+              # Save the model if the mean reward is better than the previously saved mean reward 
+              if mean_reward > self.best_mean_reward:
+                  self.best_mean_reward = mean_reward
+                  self.best_mean_reward_std = std_reward
+                  # Example for saving best model
+                  if self.verbose > 0:
+                    print(f"Saving new best model to {self.save_path}.zip")
+                  self.model.save(self.save_path)
+
+        return True
+
+
 class ImageReader:
 
     def __call__(self, file_path, require_sitk_img = False):
@@ -178,9 +258,8 @@ class Image_dataloader(Dataset):
         self.num_lesions = df_dataset[' num_lesions'].tolist()
         
         # Write to new csv file 
-        df_dataset.to_csv('/raid/candi/Iani/Biopsy_RL/Updated_patients.csv')
-        
-
+        #df_dataset.to_csv('/raid/candi/Iani/Biopsy_RL/Updated_patients.csv')
+    
         # Train with all patients 
         if use_all:
 

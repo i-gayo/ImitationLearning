@@ -19,8 +19,8 @@ class SpatialTransform:
                 torch.meshgrid(
                     torch.linspace(-1, 1, self.volsize[2]),
                     torch.linspace(-1, 1, self.volsize[1]),
-                    torch.linspace(-1, 1, self.volsize[0]),
-                    indexing="ij",
+                    torch.linspace(-1, 1, self.volsize[0])
+                    #indexing="ij",
                 ),
                 dim=3,
             )[None, ...]
@@ -65,8 +65,8 @@ class GridTransform(SpatialTransform):
                 torch.meshgrid(
                     torch.linspace(-1, 1, self.grid_size[2]),
                     torch.linspace(-1, 1, self.grid_size[1]),
-                    torch.linspace(-1, 1, self.grid_size[0]),
-                    indexing="ij",
+                    torch.linspace(-1, 1, self.grid_size[0])
+                    #indexing="ij",
                 ),
                 dim=3,
             )[None, ...]

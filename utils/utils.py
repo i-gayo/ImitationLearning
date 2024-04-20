@@ -99,8 +99,10 @@ class LabelLesions:
         """
 
         # Convert lesion mask from array to image 
-        #lesion_mask = sitk.ReadImage(lesion_mask_path[0], sitk.sitkUInt8) #uncomment for multipatient_env_v2
-        lesion_mask = sitk.ReadImage(lesion_mask_path, sitk.sitkUInt8)
+        if isinstance(lesion_mask_path, tuple):
+            lesion_mask = sitk.ReadImage(lesion_mask_path[0], sitk.sitkUInt8) #uncomment for multipatient_env_v2
+        else:
+            lesion_mask = sitk.ReadImage(lesion_mask_path, sitk.sitkUInt8)
 
         #lesion_mask = sitk.GetImageFromArray(lesion_mask_path, sitk.sitkUInt8)
         lesion_mask.SetOrigin(self.origin) 

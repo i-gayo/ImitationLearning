@@ -1,6 +1,6 @@
 import torch 
 #from Biopsy_env_single import * 
-from envs.Biopsy_env import TemplateGuidedBiopsy
+from envs.Biopsy_env import TemplateGuidedBiopsy_single
 
 import numpy as np
 from utils_il import * 
@@ -858,7 +858,7 @@ if __name__ == '__main__':
     Data_sampler = DataSampler(PS_dataset)
 
     # For environment, sample all training data
-    Biopsy_env = TemplateGuidedBiopsy(Data_sampler, reward_fn = 'penalty', terminating_condition = 'more_than_5', \
+    Biopsy_env = TemplateGuidedBiopsy_single(Data_sampler, reward_fn = 'penalty', terminating_condition = 'more_than_5', \
     start_centre = True, train_mode = MODE, env_num = '1', max_num_steps = MAX_NUM_STEPS, results_dir= LOG_DIR, deform = False)
     SimEnv = SimBiopsyEnv(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
 
