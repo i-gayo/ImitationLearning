@@ -1,8 +1,12 @@
 import torch 
-from Biopsy_env_single import * 
+#from Biopsy_env_single import * 
+from envs.Biopsy_env import TemplateGuidedBiopsy
+
 import numpy as np
 from utils_il import * 
+from utils.rl_utils import * 
 from stable_baselines3 import DDPG, PPO, SAC, DQN, TD3
+import argparse 
 
 def compute_norm_coverage(fired_pos, lesion_hit, lesion_obs):
     """
@@ -809,20 +813,29 @@ def compute_grid_pos(obs):
     
     return current_grid_pos 
     
-##### Functions to debug and test out gold standard functions 
+#Arg parse functions 
+parser = argparse.ArgumentParser(prog='generate_labels',
+                                description="Code to generate new labels.")
 
-# Initialising environment  
+parser.add_argument('--strategy',
+                    metavar='strategy',
+                    type=str,
+                    action='store',
+                    default='WACKY',
+                    help='Which strategy to use')
+
+args = parser.parse_args()
 
 if __name__ == '__main__':
     
     #### THINGS TO CHANGE: 
     # Modify this to what you need / want 
-    STRATEGY = 'WACKY'
+    STRATEGY = args.strategy 
+    print(f"Using {STRATEGY} strategy")
     
-    # Change to path on your own device 
+    # TODO: Change to path on your own device 
     DATASET_PATH = '/Users/ianijirahmae/Documents/DATASETS/Data_by_modality'
     CSV_PATH = '/Users/ianijirahmae/Documents/PhD_project/MRes_project/Reinforcement Learning/patient_data_multiple_lesions.csv'
-    
     
     ###### training parameters ###### 
     MAX_NUM_STEPS = 20
@@ -830,19 +843,22 @@ if __name__ == '__main__':
     LOG_DIR = 'debug'
     os.makedirs(LOG_DIR, exist_ok=True) 
     
+    DATA_FOLDER = 'DATA'
+    os.makedirs(DATA_FOLDER, exist_ok= True)
+    
     if STRATEGY == 'GS':
-        LABEL_PATH = 'NEW_GS.h5'
+        LABEL_PATH = os.path.join(DATA_FOLDER,'NEW_GS.h5')
     else:
-        LABEL_PATH = 'NEW_WACKY.h5'
+        LABEL_PATH = os.path.join(DATA_FOLDER,'NEW_WACKY.h5')
         
     # Generate h5py file 
-    hf = h5py.File(LABEL_PATH, 'a')    
+    hf = h5py.File(LABEL_PATH, 'w')    
 
     PS_dataset = Image_dataloader(DATASET_PATH, CSV_PATH, use_all = True, mode  = MODE)
     Data_sampler = DataSampler(PS_dataset)
 
     # For environment, sample all training data
-    Biopsy_env = TemplateGuidedBiopsy_single(Data_sampler, reward_fn = 'penalty', terminating_condition = 'more_than_5', \
+    Biopsy_env = TemplateGuidedBiopsy(Data_sampler, reward_fn = 'penalty', terminating_condition = 'more_than_5', \
     start_centre = True, train_mode = MODE, env_num = '1', max_num_steps = MAX_NUM_STEPS, results_dir= LOG_DIR, deform = False)
     SimEnv = SimBiopsyEnv(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
 
