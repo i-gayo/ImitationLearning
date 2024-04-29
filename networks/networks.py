@@ -1,4 +1,10 @@
-import torch 
+import ast
+import os
+
+import torch
+from matplotlib import pyplot as plt
+from stable_baselines3.common.monitor import load_results
+from stable_baselines3.common.results_plotter import ts2xy
 from torch import nn as nn 
 import numpy as np 
 import gym 
@@ -7,6 +13,8 @@ import gym
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from stable_baselines3.common.policies import ActorCriticPolicy
 from stable_baselines3.common.callbacks import BaseCallback
+from typing import Tuple, Callable
+
 
 class NewFeatureExtractor(BaseFeaturesExtractor):
     """

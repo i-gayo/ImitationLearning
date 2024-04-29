@@ -266,18 +266,22 @@ class Image_dataloader(Dataset):
             size_dataset = len(self.all_file_names)
 
             train_len = int(size_dataset * 0.7) 
-            test_len = int(size_dataset * 0.2) 
+            # test_len = int(size_dataset * 0.2)
+            test_len = 0
             val_len = size_dataset - (train_len + test_len)
 
             # both test and val have simila rnumber of lesions (mean = 2.4 lesions)
             self.train_names = self.all_file_names[0:train_len]
             self.val_names = self.all_file_names[train_len:train_len + val_len]
             self.test_names = self.all_file_names[train_len + val_len:]
+            self.all_names = self.all_file_names
             
             if self.mode == 'train':
                 self.all_num_lesions = self.num_lesions[0:train_len]
             elif self.mode == 'val':
                 self.all_num_lesions = self.num_lesions[train_len:train_len + val_len]
+            elif self.mode == 'all':
+                self.all_num_lesions = self.num_lesions
             else:
                 self.all_num_lesions = self.num_lesions[train_len + val_len:]
 
@@ -293,12 +297,13 @@ class Image_dataloader(Dataset):
             self.train_names = self.all_file_names[0:105]
             self.val_names = self.all_file_names[105:120]
             self.test_names = self.all_file_names[120:150]
+            self.all_names = self.all_file_names
 
             #Defining length of datasets
             #size_dataset = len(self.all_file_names)
  
 
-        self.dataset_len = {'train' : train_len, 'test': test_len, 'val' : val_len}
+        self.dataset_len = {'train' : train_len, 'test': test_len, 'val' : val_len, 'all': len(self.all_file_names)}
 
         # Folder names
         self.lesion_folder = os.path.join(folder_name, 'lesion')
@@ -345,6 +350,9 @@ class Image_dataloader(Dataset):
         elif self.mode == 'test':
             #idx_ = idx + self.dataset_len['train'] + self.dataset_len['val']
             patient_name = self.test_names[idx]
+
+        elif self.mode == 'all':
+            patient_name = self.all_names[idx]
 
         # Read prostate mask, lesion mask, prostate mask separately using ImageReader    
         #patient_name = self.all_file_names[idx_]

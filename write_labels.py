@@ -601,7 +601,7 @@ class SimBiopsyEnv():
         # Convert x,y actions 
         print(f"grid_pos {grid_pos} action{actions}")
         max_step_size = 10 # changed max step size to 10 
-        prev_pos = grid_pos - torch.tensor([50,50]).to(self.device) # subtract by origin of 50,50 
+        prev_pos = grid_pos.to(self.device) - torch.tensor([50,50]).to(self.device) # subtract by origin of 50,50
 
         action_x = actions[:,0]
         action_y = actions[:,1]
@@ -609,8 +609,8 @@ class SimBiopsyEnv():
         x_movement = round_to_05(action_x * max_step_size)
         y_movement = round_to_05(action_y * max_step_size)
         print(f"x_movement {x_movement} y {y_movement}")
-        updated_x = (prev_pos[:,0] + x_movement)
-        updated_y = (prev_pos[:,1] + y_movement)
+        updated_x = (prev_pos[:,0] + x_movement.to(self.device))
+        updated_y = (prev_pos[:,1] + y_movement.to(self.device))
         
         #Dealing with boundary positions 
         x_lower = updated_x < -30
@@ -821,7 +821,7 @@ parser.add_argument('--strategy',
                     metavar='strategy',
                     type=str,
                     action='store',
-                    default='WACKY',
+                    default='GS',
                     help='Which strategy to use')
 
 args = parser.parse_args()
@@ -834,12 +834,12 @@ if __name__ == '__main__':
     print(f"Using {STRATEGY} strategy")
     
     # TODO: Change to path on your own device 
-    DATASET_PATH = '/Users/ianijirahmae/Documents/DATASETS/Data_by_modality'
-    CSV_PATH = '/Users/ianijirahmae/Documents/PhD_project/MRes_project/Reinforcement Learning/patient_data_multiple_lesions.csv'
+    DATASET_PATH = 'ProstateDataset'
+    CSV_PATH = 'ProstateDataset/patient_data_multiple_lesions.csv'
     
     ###### training parameters ###### 
     MAX_NUM_STEPS = 20
-    MODE = 'train'
+    MODE = 'all'
     LOG_DIR = 'debug'
     os.makedirs(LOG_DIR, exist_ok=True) 
     
@@ -854,7 +854,7 @@ if __name__ == '__main__':
     # Generate h5py file 
     hf = h5py.File(LABEL_PATH, 'w')    
 
-    PS_dataset = Image_dataloader(DATASET_PATH, CSV_PATH, use_all = True, mode  = MODE)
+    PS_dataset = Image_dataloader(DATASET_PATH, CSV_PATH, use_all = True, mode = MODE)
     Data_sampler = DataSampler(PS_dataset)
 
     # For environment, sample all training data
@@ -948,7 +948,8 @@ if __name__ == '__main__':
             
             # Compute hr, ccl from predicted actions 
             actions = torch.tensor(action)
-            grid_pos = compute_grid_pos(obs.unsqueeze(0)) # Compute needle position 
+            grid_pos = compute_grid_pos(obs.unsqueeze(0)) # Compute needle position
+
             print(f"0.Grid_pos : {grid_pos}")
             print(f"Actions {actions}")
             expected_pos = grid_pos + actions[0:-1]*10

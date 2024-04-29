@@ -1,4 +1,6 @@
-import torch 
+# from random import random
+
+import torch
 import numpy as np 
 from torch.utils.data import Dataset
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
@@ -1106,7 +1108,8 @@ class Timestep_data_GS(Dataset):
         self.grid_labels = h5py.File(labels_path, 'r')
         size_dataset = len(self.all_file_names)
         train_len = int(size_dataset * 0.7) 
-        test_len = int(size_dataset * 0.2) 
+        # test_len = int(size_dataset * 0.2)
+        test_len = 0
         val_len = size_dataset - (train_len + test_len)
 
         # both test and val have simila rnumber of lesions (mean = 2.4 lesions)
@@ -1158,25 +1161,25 @@ class Timestep_data_GS(Dataset):
 
         # TODO: 
         # 1. FROM H5PY FILE, GET OBSERVAITON, ACTIONS
-        if patient_name == 'Patient418081829_study_0.nii.gz':
-            print(f"Patient418081829_study_0has idx : {idx} ")
-            # Sample new idx not 0 
-            new_idx = np.random.choice((np.delete(np.arange(0,self.dataset_len[self.mode]), idx)))
-            print(f"Sampling new random idx {new_idx}")
-            
-            if self.mode == 'test':
-                patient_name = self.test_names[new_idx]
-            if self.mode == 'val':
-                patient_name = self.val_names[new_idx]
-            if self.mode == 'train':
-                patient_name = self.train_names[new_idx]
-        
+        # if patient_name == 'Patient418081829_study_0.nii.gz':
+        #     print(f"Patient418081829_study_0has idx : {idx} ")
+        #     # Sample new idx not 0
+        #     new_idx = np.random.choice((np.delete(np.arange(0,self.dataset_len[self.mode]), idx)))
+        #     print(f"Sampling new random idx {new_idx}")
+        #
+        #     if self.mode == 'test':
+        #         patient_name = self.test_names[new_idx]
+        #     if self.mode == 'val':
+        #         patient_name = self.val_names[new_idx]
+        #     if self.mode == 'train':
+        #         patient_name = self.train_names[new_idx]
+        #
         while not(patient_name in self.grid_labels):
-            
+
             print(f'Patient name {patient_name} with idx :{idx} not in dataset, using random index instead')
             new_idx = np.random.choice((np.delete(np.arange(0,self.dataset_len[self.mode]), idx)))
             print(f"Random idx {new_idx}")
-            
+
             if self.mode == 'test':
                 patient_name = self.test_names[new_idx]
             if self.mode == 'val':
@@ -2972,7 +2975,7 @@ def train_pertimestep_GS(model, agent, train_dataloader, val_dataloader, num_epo
     freq_eval = 4
 
     # Saving files 
-    all_loss_train = np.zeros((num_epochs,1))
+    all_loss_train = np.zeros((num_epochs, 1))
     all_acc_train = np.zeros((num_epochs, 1))
     all_loss_val = [] 
     all_acc_val = []

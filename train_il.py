@@ -24,7 +24,7 @@ from stable_baselines3.common.policies import ActorCriticPolicy
 
 #Importing module functions 
 from utils.Prostate_dataloader import *
-from envs.Biopsy_env import TemplateGuidedBiopsy
+from envs.Biopsy_env import TemplateGuidedBiopsy, TemplateGuidedBiopsy_single
 import random 
 from networks.networks_il import *
 from utils.il_utils import * 
@@ -38,7 +38,8 @@ parser.add_argument('--log_dir',
                     metavar='log_dir',
                     type=str,
                     action='store',
-                    default='IL_agent_NEW',
+                    # default='IL_agent_NEW',
+                    default='Logs/IL_agent_NEW_4',
                     help='Log dir to save results to')
 
 parser.add_argument('--loss_fn',
@@ -70,7 +71,7 @@ parser.add_argument('--data_mode',
                     metavar='data_mode',
                     type=str,
                     action='store',
-                    default='wacky',
+                    default='GS',
                     help='Which training data to use : c2l, n2n or l2l')
 
 parser.add_argument('--train_strategy',
@@ -121,16 +122,18 @@ if __name__ =='__main__':
     # TODO - change to your own paths 
     #PS_PATH = '/Users/ianijirahmae/Documents/DATASETS/Data_by_modality'
     #CSV_PATH = '/Users/ianijirahmae/Documents/PhD_project/MRes_project/Reinforcement Learning/patient_data_multiple_lesions.csv'
-    PS_PATH = '/raid/candi/Iani/MRes_project/Reinforcement Learning/DATASETS/'
-    CSV_PATH = '/raid/candi/Iani/Biopsy_RL/patient_data_multiple_lesions.csv'
-    
+    PS_PATH = 'ProstateDataset'
+    CSV_PATH = 'ProstateDataset/patient_data_multiple_lesions.csv'
+    args = parser.parse_args()
+    data_mode = args.data_mode
     # load dataset: 
-    LABELS_PATH = 'GS_ALL.h5'
+    if data_mode == 'GS':
+        LABELS_PATH = 'DATA/NEW_GS.h5'
+    else:
+        LABELS_PATH = 'DATA/NEW_WACKY.h5'
     hf = h5py.File(LABELS_PATH, 'r')
     
     # Parse arguments 
-    args = parser.parse_args()
-    data_mode = args.data_mode
     print(f"Using data mode : {data_mode}")
     training_strategy = args.train_strategy
     TRAIN_MODE = 'train'
@@ -162,27 +165,27 @@ if __name__ =='__main__':
     # Pretraining paths 
     PRETRAIN = (args.pretrain == 'True')
     if args.pretrain_path == 'sequential':
-        PRETRAIN_PATH = '/raid/candi/Iani/Biopsy_RL/IMITATION_SEQUENTIAL/best_val_model.pth'
+        PRETRAIN_PATH = 'Logs/IL_agent_NEW_4/best_val_model.pth'
     else:
-        PRETRAIN_PATH = '/raid/candi/Iani/Biopsy_RL/IMITATION_SUBSAMPLE/best_val_model.pth'
+        PRETRAIN_PATH = 'Logs/IL_agent_NEW_4/best_val_model.pth'
         
     FEATURE_EXTRACTOR = args.feature_extractor
     num_timesteps = int(args.num_timesteps)
     
     # SETTING UP RL ENVIRONMENT to use RL architecture 
-    PS_dataset = Image_dataloader(PS_PATH, CSV_PATH, use_all = True, mode  = TRAIN_MODE)
-    Data_sampler= DataSampler(PS_dataset)
-    Biopsy_env = TemplateGuidedBiopsy(Data_sampler, results_dir = LOG_DIR, train_mode = TRAIN_MODE)
+    PS_dataset = Image_dataloader(PS_PATH, CSV_PATH, use_all = True, mode  = TRAIN_MODE)    # dataset size = 140
+    Data_sampler= DataSampler(PS_dataset)   # dataset size = 140
+    Biopsy_env = TemplateGuidedBiopsy_single(Data_sampler, results_dir = LOG_DIR, train_mode = TRAIN_MODE)     # dataset size = 140
     #Biopsy_env = frame_stack_v1(Biopsy_env_init, 3)
     Biopsy_env.reset()
 
     # Definign RL model to use architecture 
     policy_kwargs = dict(features_extractor_class = NewFeatureExtractor, features_extractor_kwargs=dict(multiple_frames = True, num_channels = 5))
-    agent = PPO(CnnPolicy, Biopsy_env, policy_kwargs = policy_kwargs, device = device_cuda, tensorboard_log = LOG_DIR)
+    agent = PPO(CnnPolicy, Biopsy_env, policy_kwargs = policy_kwargs, device = device_cuda, tensorboard_log = LOG_DIR)  # dataset size = 140
     
     if USING_RL:
         print(f"Using RL networks ")
-        IL_MODEL = agent.policy.to(device_cuda)
+        IL_MODEL = agent.policy.to(device_cuda) # dataset size = 140
         
         if PRETRAIN: 
             MODEL_PATH = PRETRAIN_PATH

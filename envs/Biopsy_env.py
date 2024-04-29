@@ -20,6 +20,8 @@ from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecFram
 import torch 
 import time 
 
+import matplotlib
+matplotlib.use('Agg')
 from PIL import Image, ImageDraw, ImageFont
 from utils.deform_utils import * 
 from matplotlib import pyplot as plt
@@ -163,13 +165,16 @@ class TemplateGuidedBiopsy(gym.Env):
 
         # Statistics about data 
         if train_mode == 'train':
-            self.num_data = 402 # 105
+            # self.num_data = 402 # 105
+            self.num_data = 140
         elif train_mode == 'test':
-            self.num_data = 115 # 30 
+            # self.num_data = 115 # 30
+            self.num_data = 0
         else:
-            self.num_data = 58 # 15
+            # self.num_data = 58 # 15
+            self.num_data = 60
 
-        # Add a patient counter 
+        # Add a patient counter
         self.patient_counter = 0 
 
         # Visualisation files
@@ -1611,11 +1616,17 @@ class TemplateGuidedBiopsy_single(gym.Env):
 
         # Statistics about data 
         if train_mode == 'train':
-            self.num_data = 402 # 105
+            # self.num_data = 402 # 105
+            self.num_data = 140
         elif train_mode == 'test':
-            self.num_data = 115 # 30 
+            # self.num_data = 115 # 30
+            self.num_data = 0
+        elif train_mode == 'all':
+            self.num_data = 200
         else:
-            self.num_data = 58 # 15
+            # self.num_data = 58 # 15
+            self.num_data = 60
+
 
         # Add a patient counter 
         self.patient_counter = 0 
@@ -1625,7 +1636,7 @@ class TemplateGuidedBiopsy_single(gym.Env):
           ('_output_actions_' + train_mode + '_' + env_num + '.csv'))
 
         self.file_patient_names = os.path.join(results_dir, \
-          ('_patient_names' + train_mode + '_' + env_num + '.csv'))
+          ('_patient_names_' + train_mode + '_' + env_num + '.csv'))
 
         with open(self.file_output_actions, 'w') as fp: 
           fp.write('''\

@@ -18,7 +18,7 @@ from typing import Callable, Tuple
 from utils.Prostate_dataloader import *
 #from multipatient_env_v3 import TemplateGuidedBiopsy
 #from env.Biopsy_env_single import TemplateGuidedBiopsy_single
-from envs.Biopsy_env import TemplateGuidedBiopsy
+from envs.Biopsy_env import TemplateGuidedBiopsy, TemplateGuidedBiopsy_single
 
 from stable_baselines3.common.callbacks import EvalCallback
 from stable_baselines3.common.utils import set_random_seed
