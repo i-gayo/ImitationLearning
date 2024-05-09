@@ -1,5 +1,6 @@
 import gym
 from gym import spaces
+# from gymnasium import spaces
 import numpy as np
 from numpy.core.fromnumeric import size
 from numpy.lib.twodim_base import mask_indices 
@@ -472,7 +473,7 @@ class TemplateGuidedBiopsy(gym.Env):
 
         return initial_obs  # reward, done, info can't be included
 
-    def reset(self):
+    def reset(self, **kwargs):
         
         img_data = self.sample_new_data()
         initial_obs, starting_pos, current_pos = self.initialise_state(img_data, self.start_centre)
@@ -506,8 +507,8 @@ class TemplateGuidedBiopsy(gym.Env):
         with open(self.file_patient_names, 'a') as fp: 
           fp.write(str(self.patient_name[0]))
           fp.write('\n')
-
-        return initial_obs  # reward, done, info can't be included
+        # info = {}
+        return initial_obs # reward, done, info can't be included
 
     def render(self, mode='human'):
         pass 
@@ -1556,6 +1557,7 @@ class TemplateGuidedBiopsy_single(gym.Env):
 
         ## Defining action and observation spaces
         self.action_space = spaces.Box(low = -1, high= 1, shape = (3,), dtype = np.float32)
+        print(type(self.action_space))
 
         self.observation_space = spaces.Box(low=0.0, high=1.0, shape=(5, 100, 100, 24), dtype=np.float64)
 
@@ -1658,7 +1660,7 @@ class TemplateGuidedBiopsy_single(gym.Env):
         """
         Determines how actions affect environment
         """
-
+        moves_off_same_pos = False
         self.step_count += 1
 
         #if self.patient_name[0] == 'Patient479592532_study_1.nii.gz':
@@ -1937,7 +1939,7 @@ class TemplateGuidedBiopsy_single(gym.Env):
 
         return initial_obs  # reward, done, info can't be included
 
-    def reset(self):
+    def reset(self, **kwargs):
         
         img_data = self.sample_new_data()
         initial_obs, starting_pos, current_pos = self.initialise_state(img_data, self.start_centre)

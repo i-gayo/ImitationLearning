@@ -295,19 +295,38 @@ def evaluate_agent(agent, num_episodes, Biopsy_env_val):
     
     return average_episode_reward, std_episode_reward, average_episode_len, avg_hit_rate, avg_ccl_corr, avg_efficiency, avg_hit_threshold
 
+# class CompatibleEnvWrapper:
+#     def __init__(self, env):
+#         self._env = env
+
+#     def reset(self, **kwargs):
+#         # 特殊处理reset方法
+#         obs = self._env.reset()
+#         if 'return_info' in kwargs and kwargs['return_info']:
+#             info = {}  # 添加所需的信息
+#             return obs, info
+#         return obs
+
+#     def __getattr__(self, name):
+#         # 对于除reset以外的所有属性和方法，直接从原始环境获取
+#         return getattr(self._env, name)
+
+
 if __name__ == '__main__':
     
     # PATHS TO DATASETS
     #DATASET_PATH = '/Users/ianijirahmae/Documents/DATASETS/Data_by_modality'
     #RECTUM_PATH = '/Users/ianijirahmae/Documents/PhD_project/rectum_pos.csv'
 
-    DATASET_PATH = '/raid/candi/Iani/MRes_project/Reinforcement Learning/DATASETS/'
+    # DATASET_PATH = '/raid/candi/Iani/MRes_project/Reinforcement Learning/DATASETS/'
+    DATASET_PATH = 'ProstateDataset'
+    CSV_PATH = 'ProstateDataset/patient_data_multiple_lesions.csv'
     #RECTUM_PATH = '/raid/candi/Iani/MRes_project/Reinforcement Learning/rectum_pos.csv'
-    CSV_PATH = '/raid/candi/Iani/Biopsy_RL/patient_data_multiple_lesions.csv'
+    # CSV_PATH = '/raid/candi/Iani/Biopsy_RL/patient_data_multiple_lesions.csv'
     #os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_num
     device_cuda = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     #cuda_1 = torch.device('cuda:1')
-    os.environ["CUDA_VISIBLE_DEVICES"] = "2"
+    # os.environ["CUDA_VISIBLE_DEVICES"] = "2"
     torch.cuda.is_available() # Check that CUDA works
     print(f"Number GPU available : {torch.cuda.device_count()}")
     print('Using device:', device_cuda)
@@ -395,6 +414,7 @@ if __name__ == '__main__':
                             terminating_condition = terminating_condition, device = device_cuda, \
                                 start_centre = START_CENTRE, deform = DEFORM, deform_rate = DEFORM_RATE, deform_scale = DEFORM_SCALE)
                 #Biopsy_env_init = frame_stack_v1(Biopsy_env_init, 3)
+                # Biopsy_env_init = CompatibleEnvWrapper(Biopsy_env_init)
                 Biopsy_env_init.reset()
                 #Biopsy_env_init.seed(seed + rank)
                 Biopsy_env_init.action_space.seed(seed + rank)
@@ -419,6 +439,7 @@ if __name__ == '__main__':
             return SubprocVecEnv([make_env(i) for i in range(n_envs)])
     
     Vec_Biopsy_env = make_vec_env(n_envs = 4, vecenv_class = 'Dummy', monitor_dir = LOG_DIR, monitor_kwargs =  {'info_keywords' : ('ccl_corr_online', 'hit_rate', 'efficiency', 'all_lesion_size', 'all_ccl', 'num_needles', 'num_needles_hit')})#.to(device_cuda)
+    # Vec_Biopsy_env = CompatibleEnvWrapper(Vec_Biopsy_env)
     #Vec_Biopsy_env = VecFrameStack(Vec_Biopsy_env, 3)
 
     # 3. Initialise training agent 
@@ -436,8 +457,9 @@ if __name__ == '__main__':
             if pretrain_model == 'GS':
                 print(f"Using gs model for pre-training")
                 #MODEL_PATH = 'raid/candi/Iani/Biopsy_RL/agent_model.zip/IL_GS_v2'
-                MODEL_PATH = '/raid/candi/Iani/Biopsy_RL/MODELS/GS/best_val_model.pth'
+                # MODEL_PATH = '/raid/candi/Iani/Biopsy_RL/MODELS/GS/best_val_model.pth'
                 #MODEL_PATH = '/raid/candi/Iani/Biopsy_RL/IMITATION_SUBSAMPLE_e2e/agent_model.zip'
+                MODEL_PATH = 'Logs/IL_agent_NEW_4/best_val_model.pth'
             elif pretrain_model == 'E2E':
                 print("Using E2E model for pre-training")
                 #MODEL_PATH = '/raid/candi/Iani/Biopsy_RL/IMITATION_SUBSAMPLE_e2e/agent_model.zip'
@@ -472,7 +494,8 @@ if __name__ == '__main__':
             model = agent.policy 
             if pretrain_model == 'GS':
                 #MODEL_IL_PATH = '/raid/candi/Iani/Biopsy_RL/IL_GS_v2/best_val_model.pth'
-                MODEL_IL_PATH = '/raid/candi/Iani/Biopsy_RL/MODELS/GS/best_val_model.pth'
+                # MODEL_IL_PATH = '/raid/candi/Iani/Biopsy_RL/MODELS/GS/best_val_model.pth'
+                MODEL_IL_PATH = 'Logs/IL_agent_NEW_4/best_val_model.pth'
             elif pretrain_model == 'E2E':
                 print(f"loded IL model weights E2E onto model")
                 #MODEL_IL_PATH = '/raid/candi/Iani/Biopsy_RL/IMITATION_SUBSAMPLE_e2e/best_val_model.pth'

@@ -307,7 +307,8 @@ class Image_dataloader(Dataset):
             size_dataset = len(self.all_file_names)
 
             train_len = int(size_dataset * 0.7) 
-            test_len = int(size_dataset * 0.2) 
+            # test_len = int(size_dataset * 0.2) 
+            test_len = 0
             val_len = size_dataset - (train_len + test_len)
 
             # both test and val have simila rnumber of lesions (mean = 2.4 lesions)

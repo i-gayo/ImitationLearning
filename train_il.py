@@ -119,9 +119,7 @@ parser.add_argument('--num_timesteps',
 
 if __name__ =='__main__':
 
-    # TODO - change to your own paths 
-    #PS_PATH = '/Users/ianijirahmae/Documents/DATASETS/Data_by_modality'
-    #CSV_PATH = '/Users/ianijirahmae/Documents/PhD_project/MRes_project/Reinforcement Learning/patient_data_multiple_lesions.csv'
+    test_label = 1
     PS_PATH = 'ProstateDataset'
     CSV_PATH = 'ProstateDataset/patient_data_multiple_lesions.csv'
     args = parser.parse_args()
