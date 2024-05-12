@@ -15,6 +15,7 @@ from stable_baselines3.common.policies import ActorCriticPolicy
 from typing import Callable, Tuple 
 
 #Importing module functions 
+from networks.networks_il import *
 from utils.Prostate_dataloader import *
 #from multipatient_env_v3 import TemplateGuidedBiopsy
 #from env.Biopsy_env_single import TemplateGuidedBiopsy_single
@@ -176,7 +177,7 @@ parser.add_argument('--learning_rate',
                     metavar='learning_rate',
                     type=str,
                     action='store',
-                    default='0.0001',
+                    default='0.00005',
                     help='Learning rate used for training')
 
 parser.add_argument('--pretrain',
@@ -523,6 +524,33 @@ if __name__ == '__main__':
         agent = SAC(CnnPolicy, Vec_Biopsy_env, policy_kwargs = policy_kwargs, gamma = GAMMA, \
         batch_size = BATCH_SIZE, learning_starts = 500, buffer_size = 10000, train_freq = (10, "episode"), \
         gradient_steps = 2, learning_rate = LEARNING_RATE, device = device_cuda, tensorboard_log = LOG_DIR)
+
+        if PRETRAIN:
+            model = agent.policy 
+
+            if pretrain_model == 'GS':
+                MODEL_IL_PATH = 'Logs/IL_agent_NEW_4/best_val_model.pth'
+            
+            model.load_state_dict(torch.load(MODEL_IL_PATH))
+            agent.policy = model 
+            print(f'Loaded weights from pretrained IL model {pretrain_model}')
+                
+    
+    elif algorithm == 'VIT':
+        agent = SAC(CustomViTPolicy, Vec_Biopsy_env, policy_kwargs={'features_extractor_class': ViTFeaturesExtractor}, gamma = GAMMA, \
+                    batch_size = BATCH_SIZE, learning_starts = 500, buffer_size = 10000, train_freq = (10, "episode"), \
+                    gradient_steps = 2, learning_rate = LEARNING_RATE, device = device_cuda, tensorboard_log = LOG_DIR)
+        
+        if PRETRAIN:
+            model = agent.policy 
+
+            if pretrain_model == 'GS':
+                MODEL_IL_PATH = 'Logs/IL_VIT/best_val_model.pth'
+            
+            model.load_state_dict(torch.load(MODEL_IL_PATH))
+            agent.policy = model 
+            print(f'Loaded weights from pretrained IL model {pretrain_model}')
+
         
     # 4. Train agent, evaluate for number of episodes 
     callback_train = SaveOnBestTrainingReward_single(check_freq=eval_freq, log_dir=LOG_DIR)
@@ -583,6 +611,7 @@ if __name__ == '__main__':
         writer.add_scalar('metrics/avg_hit_rate', avg_hit_rate, trial_num)
         writer.add_scalar('metrics/avg_hit_threshold', avg_hit_threshold, trial_num)
         writer.add_scalar('metrics/efficiency',avg_efficiency, trial_num)
+        writer.add_scalar('metrics/avg_ccl_corr',avg_ccl_corr, trial_num)
         #writer.add_figure('ccl_plot', ccl_plots[-1], trial_num)
    
     model_path = os.path.join(LOG_DIR, 'final_model') #Name of model to save 

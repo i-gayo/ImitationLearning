@@ -5,6 +5,37 @@ from torch.nn import functional as F
 # Import helper functions from vit and efficient network libraries 
 from networks.utils_efficient import * 
 from networks.utils_vit import * 
+from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
+from stable_baselines3.common.policies import ActorCriticPolicy
+
+
+class CustomViTPolicy(ActorCriticPolicy):
+    def __init__(self, observation_space, action_space, lr_schedule, features_extractor_class, **kwargs):
+        super(CustomViTPolicy, self).__init__(observation_space, action_space, lr_schedule, features_extractor_class=features_extractor_class, **kwargs)
+
+
+class ViTFeaturesExtractor(BaseFeaturesExtractor):
+    def __init__(self, observation_space, features_dim=512):
+        super(ViTFeaturesExtractor, self).__init__(observation_space, features_dim)
+
+        self.vit = ViT(
+            image_size=100,
+            frames=24,
+            image_patch_size=20,
+            frame_patch_size=2,
+            num_classes=features_dim,  # This should be the dimension of the latent space
+            dim=1024,
+            depth=6,
+            heads=8,
+            mlp_dim=2048,
+            dropout=0.1,
+            emb_dropout=0.1,
+            channels=5  # Assuming the input has 5 channels
+        )
+
+    def forward(self, observations):
+        return self.vit(observations)
+
 
 class EfficientNet3D(nn.Module):
 

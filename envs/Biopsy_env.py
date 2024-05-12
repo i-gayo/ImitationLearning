@@ -213,10 +213,10 @@ class TemplateGuidedBiopsy(gym.Env):
 
         ### 1. Un-normalise actions : normalised between (-1,1)
         z_unnorm = action[2] + 1 #un-normalise from (-1,1) -> 0,2 where 0 is non-fired, 1 is apex, 2 is base 
-        if z_unnorm <= -0.33: 
+        if z_unnorm <= 1 - 0.33: 
           needle_fired = False
           z_depth = 0 
-        elif ((z_unnorm > -0.33) and (z_unnorm <= 0.33)): # apex
+        elif ((z_unnorm > 1 - 0.33) and (z_unnorm <= 1 + 0.33)): # apex
           needle_fired = True 
           z_depth = 1
         else: # base 
@@ -1668,10 +1668,10 @@ class TemplateGuidedBiopsy_single(gym.Env):
 
         ### 1. Un-normalise actions : normalised between (-1,1)
         z_unnorm = action[2] + 1 #un-normalise from (-1,1) -> 0,2 where 0 is non-fired, 1 is apex, 2 is base 
-        if z_unnorm <= -0.33: 
+        if z_unnorm <= 1 - 0.33: 
           needle_fired = False
           z_depth = 0 
-        elif ((z_unnorm > -0.33) and (z_unnorm <= 0.33)): # apex
+        elif ((z_unnorm > 1 - 0.33) and (z_unnorm <= 1 + 0.33)): # apex
           needle_fired = True 
           z_depth = 1
         else: # base 

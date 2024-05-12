@@ -39,7 +39,7 @@ parser.add_argument('--log_dir',
                     type=str,
                     action='store',
                     # default='IL_agent_NEW',
-                    default='Logs/IL_agent_NEW_4',
+                    default='Logs/IL_VIT',
                     help='Log dir to save results to')
 
 parser.add_argument('--loss_fn',
@@ -201,31 +201,34 @@ if __name__ =='__main__':
             np.where(df_dataset[' num_lesions'] >= 5)[0]
         elif FEATURE_EXTRACTOR == 'vit':
             print(f"Using feature extractor VIT")
-            FEATURES_DIM = 512
-            INPUT_CHANNELS = 5
+            # FEATURES_DIM = 512
+            # INPUT_CHANNELS = 5
             
-            feature_net = ViT(
-                image_size = 100,          # image size
-                frames = 24,               # number of frames
-                image_patch_size = 20,     # image patch size # changed to 20 from 16
-                frame_patch_size = 2,      # frame patch size
-                num_classes = FEATURES_DIM,
-                dim = 1024,
-                depth = 6,
-                heads = 8,
-                mlp_dim = 2048,
-                dropout = 0.1,
-                emb_dropout = 0.1, 
-                channels = INPUT_CHANNELS
-            )
+            # feature_net = ViT(
+            #     image_size = 100,          # image size
+            #     frames = 24,               # number of frames
+            #     image_patch_size = 20,     # image patch size # changed to 20 from 16
+            #     frame_patch_size = 2,      # frame patch size
+            #     num_classes = FEATURES_DIM,
+            #     dim = 1024,
+            #     depth = 6,
+            #     heads = 8,
+            #     mlp_dim = 2048,
+            #     dropout = 0.1,
+            #     emb_dropout = 0.1, 
+            #     channels = INPUT_CHANNELS
+            # )
             
             #IL_MODEL = ActorCritic_network(feature_net)
+
+            agent = PPO(CustomViTPolicy, Biopsy_env, policy_kwargs={'features_extractor_class': ViTFeaturesExtractor}, device = device_cuda, tensorboard_log = LOG_DIR)
+            IL_MODEL = agent.policy.to(device_cuda)
             
         else: # use efficientnet 
             print(f"Using feature extractor IMITATIONCONV")
             feature_net = ImitationConv()
 
-        IL_MODEL = ActorCritic_network(feature_net)
+        # IL_MODEL = ActorCritic_network(feature_net)
     
     # Pre-train using behavioural cloning /imitation learning 
 
