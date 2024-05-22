@@ -480,8 +480,8 @@ if __name__ == '__main__':
     
     print(f"Deform : {DEFORM} rate : {DEFORM_RATE} scale {DEFORM_SCALE}")
     
-    #TODO : Load your LOG dir here 
-    LOG_DIR = '' # This is folder where your models are saved
+    # TODO : Load your LOG dir here 
+    LOG_DIR = '' # This is folder where your models are saved eg : LOG_DIR = '/raid/candi/Iani/Biopsy_RL/D025_025' but save to the folder where your models are saved! 
     RESULTS_DIR = os.path.join(LOG_DIR, "evaluate_ipcai") #this is where your lesion masks, prostate masks and 3 csv files will be saved
     os.makedirs(RESULTS_DIR, exist_ok=True) 
     plt.close('all')
